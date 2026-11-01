@@ -1,0 +1,134 @@
+"""WhisperProtocol - Acoustic Communication Protocol."""
+
+from .constants import (
+    FREQ_ZERO,
+    FREQ_ONE,
+    DEFAULT_SAMPLE_RATE,
+    DEFAULT_SYMBOL_DURATION,
+    DEFAULT_AMPLITUDE,
+    DEFAULT_FADE_MS,
+    PREAMBLE_PATTERN,
+    SYNC_PATTERN,
+    LENGTH_FIELD_BITS,
+    CHECKSUM_BITS,
+    PREAMBLE_BITS,
+    SYNC_BITS,
+    get_samples_per_symbol,
+)
+from .bitstream import (
+    bytes_to_bits,
+    bits_to_bytes,
+    bits_to_string,
+    string_to_bits,
+    BitstreamError,
+    round_trip_test,
+)
+from .checksum import (
+    compute_crc16,
+    compute_crc16_from_bits,
+    crc16_to_bits,
+    bits_to_crc16,
+    verify_checksum,
+    add_checksum,
+    strip_and_verify,
+    ChecksumError,
+)
+from .framing import (
+    encode_frame,
+    decode_frame,
+    encode_length,
+    decode_length,
+    Frame,
+    FrameError,
+    get_frame_info,
+    PREAMBLE_LENGTH,
+    SYNC_LENGTH,
+    HEADER_LENGTH,
+)
+from .modulation import (
+    generate_symbol,
+    modulate_bits,
+    get_waveform_info,
+)
+from .encoder import (
+    encode_message,
+    save_waveform,
+    encode_and_save,
+    EncodeResult,
+)
+from .demodulator import (
+    ReceiverConfig,
+    SymbolDecision,
+    ReceiverState,
+    SymbolDetection,
+    ReceiverStatus,
+    FrameDecodeResult,
+    SymbolDetector,
+    DemodulatorStateMachine,
+    AudioStreamReceiver,
+    decode_wav_file,
+)
+
+__all__ = [
+    # Constants
+    "FREQ_ZERO",
+    "FREQ_ONE",
+    "DEFAULT_SAMPLE_RATE",
+    "DEFAULT_SYMBOL_DURATION",
+    "DEFAULT_AMPLITUDE",
+    "DEFAULT_FADE_MS",
+    "PREAMBLE_PATTERN",
+    "SYNC_PATTERN",
+    "LENGTH_FIELD_BITS",
+    "CHECKSUM_BITS",
+    "PREAMBLE_BITS",
+    "SYNC_BITS",
+    "get_samples_per_symbol",
+    # Bitstream
+    "bytes_to_bits",
+    "bits_to_bytes",
+    "bits_to_string",
+    "string_to_bits",
+    "BitstreamError",
+    "round_trip_test",
+    # Checksum
+    "compute_crc16",
+    "compute_crc16_from_bits",
+    "crc16_to_bits",
+    "bits_to_crc16",
+    "verify_checksum",
+    "add_checksum",
+    "strip_and_verify",
+    "ChecksumError",
+    # Framing
+    "encode_frame",
+    "decode_frame",
+    "encode_length",
+    "decode_length",
+    "Frame",
+    "FrameError",
+    "get_frame_info",
+    "PREAMBLE_LENGTH",
+    "SYNC_LENGTH",
+    "HEADER_LENGTH",
+    # Modulation
+    "generate_symbol",
+    "modulate_bits",
+    "get_waveform_info",
+    # Encoder
+    "encode_message",
+    "save_waveform",
+    "encode_and_save",
+    "EncodeResult",
+    # Demodulator (Phase 3)
+    "ReceiverConfig",
+    "SymbolDecision",
+    "ReceiverState",
+    "SymbolDetection",
+    "ReceiverStatus",
+    "FrameDecodeResult",
+    "SymbolDetector",
+    "DemodulatorStateMachine",
+    "AudioStreamReceiver",
+    "decode_wav_file",
+]

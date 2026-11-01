@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+backend/venv/
+
+# Build artifacts
+dist/
+build/
+backend/build/
+backend/dist/
+*.egg-info/
+backend/*.egg-info/
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# OS and IDE files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables & local test files
+.env
+.env.local
+*.wav
+!tests/fixtures/*.wav
