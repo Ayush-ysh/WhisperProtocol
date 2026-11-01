@@ -177,3 +177,45 @@ class TestJSONRPCBridge:
         assert resp_status["data"]["status"]["session_id"] == session_id
         assert resp_status["data"]["status"]["state"] == "offer_sent"
 
+    def test_storage_ipc_commands(self):
+        # 1. Get settings
+        msg_s = json.dumps({"id": "req-s-1", "cmd": "get_settings", "params": {}})
+        self.bridge.handle_line(msg_s)
+        resp_s = [o for o in self._read_output_lines() if o.get("id") == "req-s-1"][0]
+        assert resp_s["status"] == "ok"
+        assert "alias" in resp_s["data"]["settings"]
+
+        # 2. Update setting
+        msg_u = json.dumps({"id": "req-s-2", "cmd": "update_setting", "params": {"key": "alias", "value": "NewBridgeAlias"}})
+        self.bridge.handle_line(msg_u)
+        resp_u = [o for o in self._read_output_lines() if o.get("id") == "req-s-2"][0]
+        assert resp_u["status"] == "ok"
+        assert resp_u["data"]["value"] == "NewBridgeAlias"
+
+        # 3. Get history
+        msg_h = json.dumps({"id": "req-s-3", "cmd": "get_transfer_history", "params": {}})
+        self.bridge.handle_line(msg_h)
+        resp_h = [o for o in self._read_output_lines() if o.get("id") == "req-s-3"][0]
+        assert resp_h["status"] == "ok"
+        assert isinstance(resp_h["data"]["history"], list)
+
+    def test_broadcast_ipc_commands(self):
+        self.bridge.coordinator.transmit = lambda *args, **kwargs: None
+
+        msg_b = json.dumps({
+            "id": "req-bcast-1",
+            "cmd": "send_broadcast",
+            "params": {
+                "file_name": "bcast.txt",
+                "payload_text": "Meeting at noon",
+                "targets": ["NodeX", "NodeY"],
+            }
+        })
+        self.bridge.handle_line(msg_b)
+        resp_b = [o for o in self._read_output_lines() if o.get("id") == "req-bcast-1"][0]
+        assert resp_b["status"] == "ok"
+        session_id = resp_b["data"]["session_id"]
+        assert session_id > 0
+        assert resp_b["data"]["targets"] == ["NodeX", "NodeY"]
+
+

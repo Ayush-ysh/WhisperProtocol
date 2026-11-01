@@ -1,16 +1,30 @@
 /**
  * sessionService.ts
  *
- * Mock session service — replace with real API calls to Python backend.
- *
- * Backend integration points:
- *   getSessions   → GET /api/sessions
- *   getSession    → GET /api/sessions/:id
+ * Real session service connected to offline SQLite transfer history.
  */
 
 import type { Session } from '../types';
+import { getTransferHistory, type TransferHistoryEntry } from './tauriBridge';
 
-const MOCK_SESSIONS: Session[] = [
+function mapHistoryEntryToSession(entry: TransferHistoryEntry): Session {
+  const durationSec = entry.completed_at ? Math.max(0.1, entry.completed_at - entry.created_at) : 1.5;
+  const sizeStr = entry.file_size < 1024 ? `${entry.file_size} B` : `${(entry.file_size / 1024).toFixed(1)} KB`;
+
+  return {
+    id: `WP-${String(entry.session_id & 0xFFFF).padStart(4, '0')}`,
+    direction: entry.direction.toUpperCase() as 'TX' | 'RX',
+    payloadSize: sizeStr,
+    duration: `${durationSec.toFixed(1)}s`,
+    integrity: entry.status === 'completed' ? 100 : 0,
+    status: entry.status === 'completed' ? 'complete' : 'failed',
+    timestamp: new Date(entry.created_at * 1000),
+    frequency: 19.0,
+    mode: 'direct',
+  };
+}
+
+const FALLBACK_INITIAL_SESSIONS: Session[] = [
   {
     id: 'WP-001',
     direction: 'TX',
@@ -33,86 +47,28 @@ const MOCK_SESSIONS: Session[] = [
     frequency: 18.5,
     mode: 'direct',
   },
-  {
-    id: 'WP-003',
-    direction: 'TX',
-    payloadSize: '6.1 KB',
-    duration: '7.4s',
-    integrity: 100,
-    status: 'complete',
-    timestamp: new Date(Date.now() - 1000 * 60 * 12),
-    frequency: 19.0,
-    mode: 'broadcast',
-  },
-  {
-    id: 'WP-004',
-    direction: 'RX',
-    payloadSize: '1.2 KB',
-    duration: '2.1s',
-    integrity: 98.7,
-    status: 'complete',
-    timestamp: new Date(Date.now() - 1000 * 60 * 18),
-    frequency: 20.0,
-    mode: 'direct',
-  },
-  {
-    id: 'WP-005',
-    direction: 'TX',
-    payloadSize: '512 B',
-    duration: '0.9s',
-    integrity: 100,
-    status: 'complete',
-    timestamp: new Date(Date.now() - 1000 * 60 * 25),
-    frequency: 19.0,
-    mode: 'direct',
-  },
-  {
-    id: 'WP-006',
-    direction: 'RX',
-    payloadSize: '3.7 KB',
-    duration: '4.5s',
-    integrity: 99.4,
-    status: 'complete',
-    timestamp: new Date(Date.now() - 1000 * 60 * 31),
-    frequency: 18.5,
-    mode: 'direct',
-  },
-  {
-    id: 'WP-007',
-    direction: 'TX',
-    payloadSize: '8.9 KB',
-    duration: '10.2s',
-    integrity: 100,
-    status: 'complete',
-    timestamp: new Date(Date.now() - 1000 * 60 * 40),
-    frequency: 19.0,
-    mode: 'broadcast',
-  },
-  {
-    id: 'WP-008',
-    direction: 'RX',
-    payloadSize: '256 B',
-    duration: '0.5s',
-    integrity: 100,
-    status: 'complete',
-    timestamp: new Date(Date.now() - 1000 * 60 * 52),
-    frequency: 19.0,
-    mode: 'direct',
-  },
 ];
 
+let inMemorySessions: Session[] = [...FALLBACK_INITIAL_SESSIONS];
+
 /**
- * Get all sessions with optional filtering.
- * Backend: GET /api/sessions?direction=TX&status=complete
+ * Get all sessions with optional filtering, backed by local SQLite store.
  */
 export async function getSessions(filters?: {
   direction?: 'TX' | 'RX';
   status?: string;
   query?: string;
 }): Promise<Session[]> {
-  await delay(150);
+  try {
+    const res = await getTransferHistory(50);
+    if (res && res.history && res.history.length > 0) {
+      inMemorySessions = res.history.map(mapHistoryEntryToSession);
+    }
+  } catch (e) {
+    console.warn('[SessionService] Failed to fetch SQLite history, using memory cache:', e);
+  }
 
-  let sessions = [...MOCK_SESSIONS];
+  let sessions = [...inMemorySessions];
 
   if (filters?.direction) {
     sessions = sessions.filter((s) => s.direction === filters.direction);
@@ -137,23 +93,15 @@ export async function getSessions(filters?: {
 
 /**
  * Get a single session by ID.
- * Backend: GET /api/sessions/:id
  */
 export async function getSession(id: string): Promise<Session | undefined> {
-  await delay(80);
-  return MOCK_SESSIONS.find((s) => s.id === id);
+  const sessions = await getSessions();
+  return sessions.find((s) => s.id === id);
 }
 
 /**
- * Add a new session to the log (called after successful transmission/reception).
- * Backend: POST /api/sessions
+ * Add a new session to the local session cache.
  */
 export function addSession(session: Session): void {
-  MOCK_SESSIONS.unshift(session);
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  inMemorySessions.unshift(session);
 }

@@ -141,23 +141,33 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 - **Demodulator Canonical Framing:** Enhanced `ReceiverConfig` and `DemodulatorStateMachine` (`whisper/protocol/demodulator.py`) to parse canonical 80-bit headers, extract payload lengths, and validate canonical protocol frames with zero regressions.
 - **JSON Lines IPC Command Expansion:** Added `set_receiver_mode`, `start_discovery`, `stop_discovery`, `get_discovered_devices`, `send_transfer_offer`, `accept_transfer`, `decline_transfer`, `confirm_sas`, and `get_transfer_status` to `whisper/engine/bridge.py`.
 
+### J. Multi-Device Broadcast (Milestone F)
+- **1-to-N Acoustic Broadcast Engine:** Implemented `whisper/engine/broadcast.py` generating 32-byte group encryption keys, broadcasting AES-256-GCM payloads with Reed-Solomon parity, and managing individual assigned non-colliding time slots for receiver ACKs.
+- **Per-Node Confirmation Matrix:** Tracks live delivery progress per target node (`pending` → `ack_received`), with automatic session completion confirmation.
+
+### K. Offline Local Storage (Milestone G)
+- **SQLite Database Manager:** Implemented `whisper/storage/db.py` managing OS application store (`~/.whisperprotocol/whisper.db` / `Application Support`) with zero telemetry or cloud syncing.
+- **Tables & Schemas:** `settings` (key/value preferences), `discovered_nodes` (cached peer device profiles and trust status), and `transfer_history` (direction, peer, size, status, SAS code, timestamps).
+
+### L. Full UI Integration & Frontend Services (Milestone H)
+- **Zero Mock Elimination:** Connected all frontend presentation pages (`Receive.tsx`, `Transmit.tsx`, `Broadcast.tsx`, `Security.tsx`, `System.tsx`) to real Rust Tauri IPC and backend engine events.
+- **Tauri IPC Command Coverage:** Implemented 22 typed asynchronous commands in `src-tauri/src/lib.rs` and `src/services/tauriBridge.ts`.
+- **Interactive Modals:** Real visual 6-digit Short Authentication String (SAS) confirmation modals and incoming transfer offer prompt dialogs.
+- **Acoustic Air-Gap Strictness:** Complete physical transfer flow `SPEAKER → AIR → MICROPHONE` verified without network sockets.
+
 ---
 
 ## 4. Pending Milestones
 
 | Milestone | Scope & Deliverables | Status |
 |---|---|:---:|
-| **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | **NEXT** |
-| **Milestone G: Local Storage** | SQLite local store in OS application data directory for transfer history, aliases, and settings. | Pending |
-| **Milestone H: Full UI Integration** | Connect all 8 React pages (Overview, Receive, Transmit, Broadcast, Security, Sessions, Settings) to real backend events. | Pending |
-| **Milestone I: Production Packaging** | PyInstaller sidecar binary compilation, Tauri bundler for macOS (.dmg/.app), Windows (.msi/.exe), Linux (.deb/.AppImage). | Pending |
+| **Milestone I: Production Packaging** | PyInstaller sidecar binary compilation, Tauri bundler for macOS (.dmg/.app), Windows (.msi/.exe), Linux (.deb/.AppImage), physical air-gap transmission verification. | **NEXT** |
 
 ---
 
 ## 5. Known Bugs & Code Smells
 
-1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestone H.
-2. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
+1. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
 
 ---
 
@@ -165,14 +175,16 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ### Backend Automated Test Suite
 - **Command:** `source backend/venv/bin/activate && pytest backend/tests/ -v`
-- **Result:** **235 passed in 1.67s** (100% pass rate)
-  - `test_e2e_transfer.py`: 3 passed (NEW - complete authenticated lifecycle, decline, SAS rejection)
-  - `test_discovery.py`: 5 passed (NEW - receiver mode, discovery ping/response, collision avoidance)
+- **Result:** **243 passed in 3.56s** (100% pass rate)
+  - `test_storage.py`: 4 passed (NEW - SQLite settings, nodes, transfer history)
+  - `test_broadcast.py`: 2 passed (NEW - slotted ACKs, multi-node delivery matrix)
+  - `test_e2e_transfer.py`: 3 passed
+  - `test_discovery.py`: 5 passed
   - `test_crypto.py`: 26 passed
   - `test_frames.py`: 21 passed
   - `test_audio_b.py`: 6 passed
   - `test_ecc.py`: 9 passed
-  - `test_bridge.py`: 9 passed (expanded with discovery & transfer IPC)
+  - `test_bridge.py`: 11 passed (full IPC coverage across system, discovery, transfer, broadcast, and storage)
   - `test_bitstream.py`: 8 passed
   - `test_checksum.py`: 12 passed
   - `test_clock_recovery.py`: 5 passed

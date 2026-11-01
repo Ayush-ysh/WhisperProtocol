@@ -1,6 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '../components/ui/Button';
+import {
+  setReceiverMode,
+  acceptTransfer,
+  declineTransfer,
+  confirmSas,
+  listenToEngineEvent,
+  type AppStatus,
+  getAppStatus,
+} from '../services/tauriBridge';
 
 const PAGE_TRANSITION = {
   initial: { opacity: 0, y: 20 },
@@ -9,19 +18,143 @@ const PAGE_TRANSITION = {
   transition: { duration: 0.8, ease: [0.16, 1, 0.3, 1] }
 };
 
-export function Receive() {
-  const [state, setState] = useState<'IDLE' | 'LISTENING' | 'ACQUIRED' | 'RECEIVED'>('IDLE');
+interface IncomingOfferData {
+  session_id: number;
+  file_name: string;
+  file_size: number;
+  peer_alias: string;
+}
 
-  const handleListen = () => {
-    setState('LISTENING');
-    
-    setTimeout(() => {
-      setState('ACQUIRED');
-      
-      setTimeout(() => {
-        setState('RECEIVED');
-      }, 3000);
-    }, 4000);
+export function Receive() {
+  const [state, setState] = useState<'IDLE' | 'LISTENING' | 'ACQUIRED' | 'OFFER_RECEIVED' | 'SAS_PENDING' | 'RECEIVED' | 'DECLINED'>('IDLE');
+  const [incomingOffer, setIncomingOffer] = useState<IncomingOfferData | null>(null);
+  const [sasCode, setSasCode] = useState<string | null>(null);
+  const [decodedPayload, setDecodedPayload] = useState<string>('');
+  const [detectedFreq, setDetectedFreq] = useState<number>(18972);
+  const [snr, setSnr] = useState<number>(30.4);
+  const [receiverActive, setReceiverActive] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Check initial status
+    getAppStatus().then((s) => {
+      if (s.receiver_mode) {
+        setReceiverActive(true);
+        setState('LISTENING');
+      }
+    }).catch((e) => console.debug('Initial app status check:', e));
+
+    // Listen to real engine events over Tauri IPC
+    let unsubOffer: (() => void) | undefined;
+    let unsubSas: (() => void) | undefined;
+    let unsubComplete: (() => void) | undefined;
+    let unsubSignal: (() => void) | undefined;
+
+    const setupListeners = async () => {
+      unsubSignal = await listenToEngineEvent<{ detected_frequency?: number; snr?: number }>(
+        'receiver.signal_detected',
+        (data) => {
+          if (data.detected_frequency) setDetectedFreq(Math.round(data.detected_frequency));
+          if (data.snr) setSnr(Math.round(data.snr * 10) / 10);
+          setState((prev) => (prev === 'LISTENING' ? 'ACQUIRED' : prev));
+        }
+      );
+
+      unsubOffer = await listenToEngineEvent<IncomingOfferData>(
+        'transfer_offer_received',
+        (offer) => {
+          setIncomingOffer(offer);
+          setState('OFFER_RECEIVED');
+        }
+      );
+
+      unsubSas = await listenToEngineEvent<{ session_id: number; sas_code: string }>(
+        'sas_pending',
+        (data) => {
+          setSasCode(data.sas_code);
+          setState('SAS_PENDING');
+        }
+      );
+
+      unsubComplete = await listenToEngineEvent<{ payload_text?: string; file_name?: string }>(
+        'transfer_completed',
+        (data) => {
+          if (data.payload_text) {
+            setDecodedPayload(data.payload_text);
+            setState('RECEIVED');
+          }
+        }
+      );
+    };
+
+    setupListeners();
+
+    return () => {
+      unsubSignal?.();
+      unsubOffer?.();
+      unsubSas?.();
+      unsubComplete?.();
+    };
+  }, []);
+
+  const handleToggleReceiver = async () => {
+    if (!receiverActive) {
+      try {
+        await setReceiverMode(true);
+        setReceiverActive(true);
+        setState('LISTENING');
+      } catch (e) {
+        console.error('Failed to engage receiver:', e);
+      }
+    } else {
+      try {
+        await setReceiverMode(false);
+        setReceiverActive(false);
+        setState('IDLE');
+      } catch (e) {
+        console.error('Failed to stop receiver:', e);
+      }
+    }
+  };
+
+  const handleAcceptOffer = async () => {
+    if (!incomingOffer) return;
+    try {
+      await acceptTransfer(incomingOffer.session_id);
+    } catch (e) {
+      console.error('Failed to accept transfer:', e);
+    }
+  };
+
+  const handleDeclineOffer = async () => {
+    if (!incomingOffer) return;
+    try {
+      await declineTransfer(incomingOffer.session_id, 'DECLINED_BY_USER');
+      setState('LISTENING');
+      setIncomingOffer(null);
+    } catch (e) {
+      console.error('Failed to decline transfer:', e);
+    }
+  };
+
+  const handleConfirmSas = async (confirmed: boolean) => {
+    if (!incomingOffer) return;
+    try {
+      await confirmSas(incomingOffer.session_id, confirmed);
+      if (!confirmed) {
+        setState('LISTENING');
+        setIncomingOffer(null);
+        setSasCode(null);
+      }
+    } catch (e) {
+      console.error('Failed to confirm SAS:', e);
+    }
+  };
+
+  const handleReset = () => {
+    setState(receiverActive ? 'LISTENING' : 'IDLE');
+    setDecodedPayload('');
+    setIncomingOffer(null);
+    setSasCode(null);
   };
 
   return (
@@ -31,28 +164,87 @@ export function Receive() {
       </div>
 
       <AnimatePresence mode="wait">
-        {state === 'RECEIVED' ? (
+        {state === 'OFFER_RECEIVED' && incomingOffer ? (
+          <motion.div
+            key="offer"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="flex flex-col items-center max-w-xl w-full"
+          >
+            <span className="text-[10px] font-mono tracking-widest text-[#888A8F] mb-4 uppercase">INCOMING ACOUSTIC OFFER</span>
+            <h1 className="text-4xl md:text-6xl font-bold tracking-tighter text-[#E8E8E3] mb-8">
+              ACCEPT<br />TRANSFER?
+            </h1>
+
+            <div className="bg-[#101114] border border-[#E8E8E3]/15 p-6 w-full text-left mb-8 font-mono text-xs text-[#E8E8E3] flex flex-col gap-3">
+              <div className="flex justify-between border-b border-[#E8E8E3]/10 pb-2">
+                <span className="text-[#888A8F]">SENDER:</span>
+                <span>{incomingOffer.peer_alias || 'NEARBY NODE'}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#E8E8E3]/10 pb-2">
+                <span className="text-[#888A8F]">PAYLOAD:</span>
+                <span>{incomingOffer.file_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#888A8F]">SIZE:</span>
+                <span>{incomingOffer.file_size} BYTES</span>
+              </div>
+            </div>
+
+            <div className="flex gap-4">
+              <Button onClick={handleAcceptOffer}>ACCEPT TRANSFER</Button>
+              <Button variant="outline" onClick={handleDeclineOffer}>DECLINE</Button>
+            </div>
+          </motion.div>
+        ) : state === 'SAS_PENDING' && sasCode ? (
+          <motion.div
+            key="sas"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="flex flex-col items-center max-w-xl w-full"
+          >
+            <span className="text-[10px] font-mono tracking-widest text-[#888A8F] mb-4 uppercase">VISUAL AUTHENTICATION</span>
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tighter text-[#E8E8E3] mb-6">
+              VERIFY SAS CODE
+            </h1>
+            <p className="text-xs font-mono text-[#888A8F] mb-8 max-w-md">
+              Verify that the 6-digit Short Authentication String below exactly matches the code on the sender device.
+            </p>
+
+            <div className="bg-[#101114] border border-[#E8E8E3]/20 px-12 py-8 mb-8">
+              <span className="text-5xl md:text-6xl font-mono font-bold tracking-widest text-[#E8E8E3]">
+                {sasCode}
+              </span>
+            </div>
+
+            <div className="flex gap-4">
+              <Button onClick={() => handleConfirmSas(true)}>CODES MATCH (CONFIRM)</Button>
+              <Button variant="outline" onClick={() => handleConfirmSas(false)}>REJECT</Button>
+            </div>
+          </motion.div>
+        ) : state === 'RECEIVED' ? (
           <motion.div 
             key="received"
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="flex flex-col items-center"
+            className="flex flex-col items-center max-w-2xl w-full"
           >
-            <h1 className="text-6xl md:text-8xl lg:text-9xl font-bold tracking-tighter leading-[0.85] text-[#E8E8E3] mb-12">
+            <h1 className="text-6xl md:text-8xl lg:text-9xl font-bold tracking-tighter leading-[0.85] text-[#E8E8E3] mb-8">
               DATA<br />RECEIVED.
             </h1>
 
-            <div className="bg-[#101114] border border-[#E8E8E3]/10 p-8 text-left max-w-2xl w-full mb-12">
-              <p className="text-sm font-mono text-[#E8E8E3] leading-relaxed break-words">
-                [SECURE PAYLOAD CONTENT DECODED SUCCESSFULLY]
-                <br /><br />
-                OPERATION BLACKBIRD INITIATED.
-                COORDINATES VERIFIED.
-                AWAITING FURTHER INSTRUCTIONS.
+            <div className="bg-[#101114] border border-[#E8E8E3]/15 p-8 text-left w-full mb-8">
+              <span className="text-[10px] font-mono tracking-widest text-[#888A8F] uppercase block mb-4">
+                [DECRYPTED & AEAD VERIFIED VIA AIR GAP]
+              </span>
+              <p className="text-sm font-mono text-[#E8E8E3] leading-relaxed break-words whitespace-pre-wrap">
+                {decodedPayload || '[EMPTY PAYLOAD]'}
               </p>
             </div>
 
-            <Button onClick={() => setState('IDLE')}>RESET RECEIVER</Button>
+            <Button onClick={handleReset}>READY FOR NEXT TRANSFER</Button>
           </motion.div>
         ) : (
           <motion.div 
@@ -68,11 +260,8 @@ export function Receive() {
 
             {/* Abstract Radar / Spectrum */}
             <div className="relative w-64 h-64 md:w-96 md:h-96 flex items-center justify-center mb-16">
-              {/* Center point */}
               <div className="w-2 h-2 bg-[#E8E8E3]" />
-              
-              {/* Concentric circles */}
-              {[1, 2, 3, 4].map(i => (
+              {[1, 2, 3, 4].map((i) => (
                 <div 
                   key={i}
                   className="absolute rounded-full border border-[#E8E8E3]/5"
@@ -80,7 +269,6 @@ export function Receive() {
                 />
               ))}
 
-              {/* Scanning elements */}
               {state !== 'IDLE' && (
                 <>
                   <motion.div 
@@ -96,7 +284,6 @@ export function Receive() {
                 </>
               )}
 
-              {/* Acquired state */}
               {state === 'ACQUIRED' && (
                 <motion.div 
                   initial={{ scale: 0 }}
@@ -114,9 +301,11 @@ export function Receive() {
 
             <div className="h-16 flex items-center justify-center mb-8">
               <span className="text-[10px] font-mono tracking-widest text-[#E8E8E3] uppercase">
-                {state === 'IDLE' ? 'WAITING FOR SIGNAL' : 
-                 state === 'LISTENING' ? 'LISTENING...' : 
-                 'SIGNAL ACQUIRED'}
+                {state === 'IDLE'
+                  ? 'RECEIVER STANDBY — TAP TO ENGAGE'
+                  : state === 'LISTENING'
+                  ? 'LISTENING ON ULTRASONIC CHANNEL (18–19 KHZ)...'
+                  : 'ACOUSTIC CARRIER ACQUIRED — LOCKING FRAME'}
               </span>
             </div>
 
@@ -127,8 +316,8 @@ export function Receive() {
                 className="grid grid-cols-3 gap-8 md:gap-16 text-left"
               >
                 {[
-                  ['FREQ', '18.972 KHZ'],
-                  ['SNR', '30.4 DB'],
+                  ['FREQ', `${detectedFreq} HZ`],
+                  ['SNR', `${snr} DB`],
                   ['FRAME', 'LOCKED'],
                 ].map(([label, val]) => (
                   <div key={label}>
@@ -138,8 +327,8 @@ export function Receive() {
                 ))}
               </motion.div>
             ) : (
-              <Button onClick={handleListen} disabled={state !== 'IDLE'}>
-                ACTIVATE RECEIVER
+              <Button onClick={handleToggleReceiver}>
+                {receiverActive ? 'DEACTIVATE RECEIVER' : 'ACTIVATE RECEIVER'}
               </Button>
             )}
           </motion.div>

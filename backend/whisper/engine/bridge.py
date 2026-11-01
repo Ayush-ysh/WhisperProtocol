@@ -24,8 +24,10 @@ from whisper.audio.diagnostics import detect_test_tone
 from whisper.audio.coordinator import HalfDuplexAudioCoordinator
 from whisper.protocol.demodulator import ReceiverConfig, FrameDecodeResult
 from whisper.protocol.frames import FrameType
-from whisper.engine.discovery import DiscoveryEngine
+from whisper.engine.discovery import DiscoveryEngine, DiscoveredDevice
 from whisper.engine.transfer import TransferEngine
+from whisper.engine.broadcast import BroadcastEngine
+from whisper.storage.db import DatabaseManager
 from whisper.events import get_event_bus, Event
 
 # Enforce logging to stderr ONLY
@@ -45,6 +47,7 @@ class JSONRPCBridge:
         in_stream: Optional[TextIO] = None,
         out_stream: Optional[TextIO] = None,
         coordinator: Optional[HalfDuplexAudioCoordinator] = None,
+        database: Optional[DatabaseManager] = None,
     ):
         self.in_stream = in_stream or sys.stdin
         self.out_stream = out_stream or sys.stdout
@@ -52,18 +55,29 @@ class JSONRPCBridge:
         self._running = False
         self._event_unsub: Optional[Callable[[], None]] = None
 
+        # Offline SQLite Local Store
+        self.db = database or DatabaseManager()
+
         # Shared Half-Duplex Audio Coordinator
         self.coordinator = coordinator or HalfDuplexAudioCoordinator(
             receiver_config=ReceiverConfig(sample_rate=48000, canonical_framing=True),
             on_frame_received=self._on_frame_received,
         )
 
-        # Discovery & Transfer Sub-Engines
+        # Discovery Engine
         self.discovery = DiscoveryEngine(
             coordinator=self.coordinator,
-            on_device_discovered=lambda dev: self.send_event("device_discovered", dev.to_dict()),
+            on_device_discovered=self._on_device_discovered,
         )
+
+        # Transfer Engine
         self.transfer = TransferEngine(
+            coordinator=self.coordinator,
+            on_event=self._on_transfer_event,
+        )
+
+        # Multi-Device Broadcast Engine
+        self.broadcast = BroadcastEngine(
             coordinator=self.coordinator,
             on_event=lambda ev_name, data: self.send_event(ev_name, data),
         )
@@ -88,6 +102,16 @@ class JSONRPCBridge:
             "decline_transfer": self._cmd_decline_transfer,
             "confirm_sas": self._cmd_confirm_sas,
             "get_transfer_status": self._cmd_get_transfer_status,
+            # Multi-Device Broadcast
+            "send_broadcast": self._cmd_send_broadcast,
+            "get_broadcast_status": self._cmd_get_broadcast_status,
+            # Storage / Settings / History
+            "get_settings": self._cmd_get_settings,
+            "update_setting": self._cmd_update_setting,
+            "get_saved_nodes": self._cmd_get_saved_nodes,
+            "delete_saved_node": self._cmd_delete_saved_node,
+            "get_transfer_history": self._cmd_get_transfer_history,
+            "clear_transfer_history": self._cmd_clear_transfer_history,
         }
 
     def _write_json(self, payload: Dict[str, Any]) -> None:
@@ -125,6 +149,42 @@ class JSONRPCBridge:
         except Exception as e:
             logger.error("Failed to forward event %s: %s", event.type.value, e)
 
+    def _on_device_discovered(self, dev: DiscoveredDevice) -> None:
+        """Persist to local database and emit event."""
+        self.db.upsert_node(
+            alias=dev.alias,
+            session_id=dev.session_id,
+            rssi_db=dev.rssi_db,
+            profile=dev.profile,
+        )
+        self.send_event("device_discovered", dev.to_dict())
+
+    def _on_transfer_event(self, ev_name: str, data: Dict[str, Any]) -> None:
+        """Handle transfer events and log completed/failed transfers to history."""
+        self.send_event(ev_name, data)
+
+        if ev_name in ("transfer_completed", "transfer_failed", "transfer_declined"):
+            session_id = data.get("session_id", 0)
+            file_name = data.get("file_name", "message.txt")
+            file_size = data.get("bytes_received") or data.get("file_size", 0)
+            peer_alias = data.get("peer_alias", "unknown")
+            sas_code = data.get("sas_code")
+            error_msg = data.get("error_message")
+
+            status = "completed" if ev_name == "transfer_completed" else ("declined" if ev_name == "transfer_declined" else "failed")
+            direction = "rx" if "bytes_received" in data else "tx"
+
+            self.db.record_transfer(
+                session_id=session_id,
+                direction=direction,
+                peer_alias=peer_alias,
+                file_name=file_name,
+                file_size=file_size,
+                status=status,
+                sas_code=sas_code,
+                error_message=error_msg,
+            )
+
     def _on_frame_received(self, result: FrameDecodeResult) -> None:
         """Central acoustic packet router."""
         if not result.success or not result.protocol_frame:
@@ -134,6 +194,8 @@ class JSONRPCBridge:
 
         if ftype in (FrameType.DISCOVERY_PING, FrameType.DISCOVERY_RESPONSE):
             self.discovery._on_frame_received(result)
+        elif ftype == FrameType.TRANSFER_ACK and frame.session_id in self.broadcast._sessions:
+            self.broadcast._on_frame_received(result)
         else:
             self.transfer._on_frame_received(result)
 
@@ -222,7 +284,6 @@ class JSONRPCBridge:
         output_idx = params.get("output_device_index")
         sample_rate = params.get("sample_rate", 48000)
 
-        # Validate sample rate support
         if input_idx is not None:
             if not check_sample_rate_support(input_idx, sample_rate, is_input=True):
                 sample_rate = 44100
@@ -350,6 +411,67 @@ class JSONRPCBridge:
         session_id = int(params["session_id"])
         status = self.transfer.get_session_status(session_id)
         return {"session_id": session_id, "status": status}
+
+    # ─── Multi-Device Broadcast Commands ─────────────────────────────────────────
+
+    def _cmd_send_broadcast(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        file_name = params.get("file_name", "broadcast.bin")
+        payload_text = params.get("payload_text")
+        payload_b64 = params.get("payload_base64")
+
+        if payload_text is not None:
+            payload = payload_text.encode("utf-8")
+        elif payload_b64 is not None:
+            payload = base64.b64decode(payload_b64)
+        else:
+            raise ValueError("Either 'payload_text' or 'payload_base64' is required")
+
+        targets = params.get("targets", [])
+        profile = params.get("profile", "ultrasonic")
+        ecc = int(params.get("ecc", 8))
+
+        session_id = self.broadcast.initiate_broadcast(
+            file_name=file_name,
+            payload=payload,
+            target_aliases=targets,
+            profile_name=profile,
+            ecc_symbols=ecc,
+        )
+
+        return {"session_id": session_id, "targets": targets, "file_name": file_name, "file_size": len(payload)}
+
+    def _cmd_get_broadcast_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = int(params["session_id"])
+        status = self.broadcast.get_broadcast_status(session_id)
+        return {"session_id": session_id, "status": status}
+
+    # ─── Local Storage & Settings Commands ───────────────────────────────────────
+
+    def _cmd_get_settings(self, _params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"settings": self.db.get_all_settings()}
+
+    def _cmd_update_setting(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        key = params["key"]
+        val = str(params["value"])
+        self.db.set_setting(key, val)
+        return {"updated": True, "key": key, "value": val}
+
+    def _cmd_get_saved_nodes(self, _params: Dict[str, Any]) -> Dict[str, Any]:
+        nodes = self.db.get_nodes()
+        return {"nodes": nodes}
+
+    def _cmd_delete_saved_node(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        deleted = self.db.delete_node(params["alias"])
+        return {"deleted": deleted}
+
+    def _cmd_get_transfer_history(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        limit = int(params.get("limit", 50))
+        history = self.db.get_transfer_history(limit=limit)
+        return {"history": history}
+
+    def _cmd_clear_transfer_history(self, _params: Dict[str, Any]) -> Dict[str, Any]:
+        self.db.clear_history()
+        return {"cleared": True}
 
     # ─── Process Run Loop ────────────────────────────────────────────────────────
 
