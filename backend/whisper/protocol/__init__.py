@@ -57,6 +57,26 @@ from .framing import (
     SYNC_LENGTH,
     HEADER_LENGTH,
 )
+from .frames import (
+    FrameType,
+    ProtocolFrame,
+    ProtocolFrameError,
+    InvalidFrameTypeError,
+    FrameTruncatedError,
+    ChecksumMismatchError,
+    encode_protocol_frame,
+    decode_protocol_frame,
+    create_discovery_ping,
+    create_discovery_response,
+    create_transfer_offer,
+    create_transfer_accept,
+    create_transfer_decline,
+    create_data_frame,
+    create_transfer_ack,
+    create_transfer_error,
+    FrameSequenceTracker,
+)
+
 from .modulation import (
     generate_symbol,
     modulate_bits,
@@ -134,7 +154,26 @@ __all__ = [
     "PREAMBLE_LENGTH",
     "SYNC_LENGTH",
     "HEADER_LENGTH",
+    # Canonical Protocol Frames (Phase C)
+    "FrameType",
+    "ProtocolFrame",
+    "ProtocolFrameError",
+    "InvalidFrameTypeError",
+    "FrameTruncatedError",
+    "ChecksumMismatchError",
+    "encode_protocol_frame",
+    "decode_protocol_frame",
+    "create_discovery_ping",
+    "create_discovery_response",
+    "create_transfer_offer",
+    "create_transfer_accept",
+    "create_transfer_decline",
+    "create_data_frame",
+    "create_transfer_ack",
+    "create_transfer_error",
+    "FrameSequenceTracker",
     # Modulation
+
     "generate_symbol",
     "modulate_bits",
     "get_waveform_info",

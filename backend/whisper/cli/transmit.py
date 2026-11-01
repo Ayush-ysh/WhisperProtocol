@@ -112,6 +112,10 @@ def transmit_message(
     amplitude: float = DEFAULT_AMPLITUDE,
     fade_ms: float = DEFAULT_FADE_MS,
     output_device_name: str = "default",
+    freq_zero: float = FREQ_ZERO,
+    freq_one: float = FREQ_ONE,
+    ecc_symbols: int = 0,
+    phase_continuous: bool = False,
 ) -> int:
     """
     Transmit a message via AFSK over the selected output device.
@@ -125,8 +129,8 @@ def transmit_message(
         "sample_rate": sample_rate,
         "symbol_duration": symbol_duration,
         "amplitude": amplitude,
-        "freq_zero": FREQ_ZERO / 1000.0,
-        "freq_one": FREQ_ONE / 1000.0,
+        "freq_zero": freq_zero / 1000.0,
+        "freq_one": freq_one / 1000.0,
     })
 
     ui.print_header()
@@ -147,6 +151,10 @@ def transmit_message(
             symbol_duration=symbol_duration,
             amplitude=amplitude,
             fade_ms=fade_ms,
+            freq_zero=freq_zero,
+            freq_one=freq_one,
+            ecc_symbols=ecc_symbols,
+            phase_continuous=phase_continuous,
         )
     except Exception as e:
         ui.print_error(f"Encoding failed: {e}")
@@ -156,12 +164,14 @@ def transmit_message(
 
     # Frame info
     frame_info = get_frame_info(message.encode("utf-8"))
+    ecc_msg = f" + {ecc_symbols} ECC" if ecc_symbols > 0 else ""
     print(f"Frame: {frame_info['total_bits']} bits "
           f"({frame_info['preamble_bits']} preamble + "
           f"{frame_info['sync_bits']} sync + "
           f"{frame_info['length_bits']} length + "
-          f"{frame_info['payload_bits']} payload + "
+          f"{frame_info['payload_bits']} payload{ecc_msg} + "
           f"{frame_info['checksum_bits']} checksum)")
+
 
     # Emit transmission started event
     emit_transmission_started(message, sample_rate, symbol_duration, amplitude)
@@ -260,6 +270,24 @@ Examples:
         help="List output devices and exit",
     )
     parser.add_argument(
+        "--profile",
+        choices=["ultrasonic", "audible"],
+        default="ultrasonic",
+        help="Modulation profile: 'ultrasonic' (18/19 kHz) or 'audible' (14/15 kHz) (default: ultrasonic)",
+    )
+    parser.add_argument(
+        "--ecc",
+        type=int,
+        choices=[0, 8, 16, 32],
+        default=0,
+        help="Reed-Solomon parity symbols: 0, 8, 16, or 32 (default: 0)",
+    )
+    parser.add_argument(
+        "--phase-continuous",
+        action="store_true",
+        help="Generate phase-continuous CPFSK waveform instead of symbol-windowed tones",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Verbose logging",
@@ -281,6 +309,9 @@ Examples:
             print(f"\nDefault: {default}")
         return 0
 
+    from whisper.protocol.constants import MODULATION_PROFILES
+    profile = MODULATION_PROFILES.get(args.profile, MODULATION_PROFILES["ultrasonic"])
+
     # Get output device name
     output_device_name = "default"
     if args.output is not None:
@@ -297,7 +328,12 @@ Examples:
         amplitude=args.amplitude,
         fade_ms=args.fade_ms,
         output_device_name=output_device_name,
+        freq_zero=profile.freq_zero,
+        freq_one=profile.freq_one,
+        ecc_symbols=args.ecc,
+        phase_continuous=args.phase_continuous,
     )
+
 
 
 if __name__ == "__main__":

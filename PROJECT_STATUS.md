@@ -122,14 +122,20 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 - **Half-Duplex Coordinator:** Implemented `HalfDuplexAudioCoordinator` (`whisper/audio/coordinator.py`) providing mutual exclusion between speaker playback and microphone listening, paired with a 350 ms acoustic reverberation decay guard interval.
 - **CLI Upgrades:** Updated `whisper.cli.transmit` and `whisper.cli.receive` with `--profile {ultrasonic,audible}`, `--ecc {0,8,16,32}`, and `--phase-continuous` options.
 
+### G. Canonical Protocol Framing & Handshake Frames (Milestone C)
+- **8 Canonical Frame Types:** Implemented `FrameType` enum and `ProtocolFrame` in `whisper/protocol/frames.py` covering `DISCOVERY_PING (0x01)`, `DISCOVERY_RESPONSE (0x02)`, `TRANSFER_OFFER (0x03)`, `TRANSFER_ACCEPT (0x04)`, `TRANSFER_DECLINE (0x05)`, `DATA_FRAME (0x06)`, `TRANSFER_ACK (0x07)`, and `TRANSFER_ERROR (0x08)`.
+- **Structured Binary Layout:** `[PREAMBLE 32b] [SYNC 16b] [VERSION 8b] [FRAME_TYPE 8b] [SESSION_ID 32b] [SEQ_NUM 16b] [PAYLOAD_LEN 16b] [PAYLOAD] [CRC16 16b]`.
+- **Integrity & Bounds Validation:** CRC-16 CCITT verification over entire frame header + payload; rejection of oversized frames (>4096 bytes) and truncated sequences.
+- **Sequence & Duplicate Tracking:** Implemented `FrameSequenceTracker` to validate packet ordering and reject replay or duplicate acoustic frames.
+- **Dedicated Builders:** Helper functions for all handshakes (`create_discovery_ping`, `create_transfer_offer`, `create_data_frame`, `create_transfer_ack`, etc.).
+
 ---
 
 ## 4. Pending Milestones
 
 | Milestone | Scope & Deliverables | Status |
 |---|---|:---:|
-| **Milestone C: Canonical Protocol Framing** | Canonical 8-type frame architecture (`DISCOVERY_PING`, `TRANSFER_OFFER`, `DATA_FRAME`, etc.), protocol version, session ID, sequence numbers. | **NEXT** |
-| **Milestone D: Cryptography & Secure Pairing** | Ephemeral X25519 key exchange, HKDF-SHA256 directional session keys, AES-256-GCM authenticated encryption, 6-digit SAS visual confirmation, unique nonce tracking. | Pending |
+| **Milestone D: Cryptography & Secure Pairing** | Ephemeral X25519 key exchange, HKDF-SHA256 directional session keys, AES-256-GCM authenticated encryption, 6-digit SAS visual confirmation, unique nonce tracking. | **NEXT** |
 | **Milestone E: Discovery & Transfer State Machine** | Opt-in discovery with randomized collision avoidance slots (800 ms), explicit offer/accept handshake, SAS verification gating payload transfer. | Pending |
 | **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | Pending |
 | **Milestone G: Local Storage** | SQLite local store in OS application data directory for transfer history, aliases, and settings. | Pending |
@@ -140,7 +146,7 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ## 5. Known Bugs & Code Smells
 
-1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestones C–E.
+1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestones D–E.
 2. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
 
 ---
@@ -149,9 +155,10 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ### Backend Automated Test Suite
 - **Command:** `source backend/venv/bin/activate && pytest backend/tests/ -v`
-- **Result:** **178 passed in 1.24s** (100% pass rate)
-  - `test_audio_b.py`: 6 passed (NEW - coordinator, CPFSK, audible profile)
-  - `test_ecc.py`: 9 passed (NEW - Reed-Solomon FEC)
+- **Result:** **199 passed in 1.24s** (100% pass rate)
+  - `test_frames.py`: 21 passed (NEW - all 8 canonical frame types, builders, sequence tracking)
+  - `test_audio_b.py`: 6 passed
+  - `test_ecc.py`: 9 passed
   - `test_bridge.py`: 7 passed
   - `test_bitstream.py`: 8 passed
   - `test_checksum.py`: 12 passed
@@ -164,6 +171,7 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
   - `test_diagnostics.py`: 17 passed
   - `test_events.py`: 5 passed
   - `test_signal.py`: 20 passed
+
 
 
 ### Desktop Shell Compilation (Tauri 2 + Rust)

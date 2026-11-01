@@ -268,6 +268,19 @@ Examples:
         help=f"Frequency for bit 1 in Hz (default: {FREQ_ONE})",
     )
     parser.add_argument(
+        "--profile",
+        choices=["ultrasonic", "audible"],
+        default="ultrasonic",
+        help="Modulation profile: 'ultrasonic' (18/19 kHz) or 'audible' (14/15 kHz) (default: ultrasonic)",
+    )
+    parser.add_argument(
+        "--ecc",
+        type=int,
+        choices=[0, 8, 16, 32],
+        default=0,
+        help="Reed-Solomon parity symbols expected: 0, 8, 16, or 32 (default: 0)",
+    )
+    parser.add_argument(
         "--threshold-db",
         type=float,
         default=20.0,
@@ -324,17 +337,25 @@ Examples:
             print(f"  {d}")
         return 0
 
+    from whisper.protocol.constants import MODULATION_PROFILES
+    profile = MODULATION_PROFILES.get(args.profile, MODULATION_PROFILES["ultrasonic"])
+
+    freq_zero = args.freq_zero if args.freq_zero != FREQ_ZERO else profile.freq_zero
+    freq_one = args.freq_one if args.freq_one != FREQ_ONE else profile.freq_one
+
     config = ReceiverConfig(
         sample_rate=args.sample_rate,
         symbol_duration=args.duration,
-        freq_zero=args.freq_zero,
-        freq_one=args.freq_one,
+        freq_zero=freq_zero,
+        freq_one=freq_one,
         detection_threshold_db=args.threshold_db,
         min_snr_db=args.min_snr_db,
         min_confidence=args.min_confidence,
         input_device=args.input,
         block_size=args.block_size,
+        ecc_symbols=args.ecc,
     )
+
 
     ui = ReceiverUI(config, continuous=args.continuous)
 
