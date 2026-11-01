@@ -129,14 +129,19 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 - **Sequence & Duplicate Tracking:** Implemented `FrameSequenceTracker` to validate packet ordering and reject replay or duplicate acoustic frames.
 - **Dedicated Builders:** Helper functions for all handshakes (`create_discovery_ping`, `create_transfer_offer`, `create_data_frame`, `create_transfer_ack`, etc.).
 
+### H. Cryptography & Secure Pairing (Milestone D)
+- **Ephemeral X25519 Key Agreement:** Implemented `whisper/crypto/x25519.py` generating ephemeral 32-byte keypairs and computing Diffie-Hellman shared secrets per session.
+- **HKDF-SHA256 Directional Keys & SAS:** Implemented `whisper/crypto/hkdf.py` deriving directional AES-256 session keys (Sender → Receiver and Receiver → Sender) and computing a 6-digit visual Short Authentication String (SAS, e.g. `842-195`) bound to both participant public keys.
+- **AES-256-GCM Authenticated Encryption:** Implemented `whisper/crypto/aes_gcm.py` with 96-bit unique nonces, 128-bit authentication tags, Additional Authenticated Data (AAD) session binding, and packed binary payloads.
+- **CryptoSession Lifecycle & Replay Defense:** Implemented `whisper/crypto/session.py` managing state transitions (`INITIALIZING` → `SAS_PENDING` → `SAS_VERIFIED` / `SAS_REJECTED` → `ACTIVE` → `EXPIRED`), strictly blocking transfers before user visual confirmation, rejecting replayed nonces, and enforcing session TTLs.
+
 ---
 
 ## 4. Pending Milestones
 
 | Milestone | Scope & Deliverables | Status |
 |---|---|:---:|
-| **Milestone D: Cryptography & Secure Pairing** | Ephemeral X25519 key exchange, HKDF-SHA256 directional session keys, AES-256-GCM authenticated encryption, 6-digit SAS visual confirmation, unique nonce tracking. | **NEXT** |
-| **Milestone E: Discovery & Transfer State Machine** | Opt-in discovery with randomized collision avoidance slots (800 ms), explicit offer/accept handshake, SAS verification gating payload transfer. | Pending |
+| **Milestone E: Discovery & Transfer State Machine** | Opt-in discovery with randomized collision avoidance slots (800 ms), explicit offer/accept handshake, SAS verification gating payload transfer. | **NEXT** |
 | **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | Pending |
 | **Milestone G: Local Storage** | SQLite local store in OS application data directory for transfer history, aliases, and settings. | Pending |
 | **Milestone H: Full UI Integration** | Connect all 8 React pages (Overview, Receive, Transmit, Broadcast, Security, Sessions, Settings) to real backend events. | Pending |
@@ -146,7 +151,7 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ## 5. Known Bugs & Code Smells
 
-1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestones D–E.
+1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestone E.
 2. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
 
 ---
@@ -155,8 +160,9 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ### Backend Automated Test Suite
 - **Command:** `source backend/venv/bin/activate && pytest backend/tests/ -v`
-- **Result:** **199 passed in 1.24s** (100% pass rate)
-  - `test_frames.py`: 21 passed (NEW - all 8 canonical frame types, builders, sequence tracking)
+- **Result:** **225 passed in 1.46s** (100% pass rate)
+  - `test_crypto.py`: 26 passed (NEW - X25519, HKDF, SAS, AES-GCM, CryptoSession, anti-replay)
+  - `test_frames.py`: 21 passed
   - `test_audio_b.py`: 6 passed
   - `test_ecc.py`: 9 passed
   - `test_bridge.py`: 7 passed
