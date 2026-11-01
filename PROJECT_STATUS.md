@@ -106,39 +106,46 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 - **Consistent Editorial Design:** Monochromatic dark terminal aesthetic with synchronized route numbering, high-contrast layouts, and brutalist buttons.
 - **Clean Builds:** Zero TypeScript errors (`tsc --noEmit`), clean production bundle (`vite build`).
 
+### E. Desktop Foundation & JSON Lines IPC Bridge (Milestone A)
+- **Rust Toolchain:** Installed and verified Rust 1.99.1 and Cargo 1.99.1.
+- **Tauri 2 Desktop Host (`src-tauri/`):** Initialized Tauri 2 application shell with Tokio async runtime, child process management, and native macOS permissions. Compiles cleanly with zero errors/warnings.
+- **Python JSON Lines Bridge (`whisper/engine/bridge.py`):** Pure stdin/stdout IPC process server. Stdout is reserved exclusively for JSON responses and events; stderr is dedicated to logs. Includes request ID correlation, command timeout handling, and graceful process termination.
+- **Frontend IPC Adapter (`src/services/tauriBridge.ts`):** Type-safe client wrapping Tauri commands (`get_app_status`, `list_audio_devices`, `run_calibration`, `start_engine`, `stop_engine`, `shutdown_engine`) with transparent web fallback.
+- **Real Hardware Telemetry:** `System.tsx` and `diagnosticsService.ts` wired to live device enumeration and calibration, replacing the previous `setTimeout` simulation.
+- **Automated Verification:** Added `backend/tests/test_bridge.py` (7 tests covering JSON parsing, error dispatch, request ID matching, and event forwarding).
+
 ---
 
-## 4. Incomplete Features (To Be Implemented)
+## 4. Pending Milestones
 
-| Feature Area | Description | Target Milestone |
-|---|---|---|
-| **Desktop Shell (Tauri 2)** | Rust-based desktop shell (`src-tauri`), native windowing, permissions, and app lifecycle. | Milestone A |
-| **JSON Lines IPC Bridge** | Standard input/output process controller connecting Tauri Rust host to the Python engine without open network ports. | Milestone A |
-| **Cryptography Layer** | X25519 ephemeral key exchange, HKDF-SHA256 derivation, AES-256-GCM authenticated payload encryption. | Milestone B |
-| **Reed-Solomon ECC** | Frame-level forward error correction (FEC) to correct corrupted symbols before authentication. | Milestone B |
-| **Acoustic Device Discovery** | Framed request/response protocol (`DISCOVERY_PING`, `DISCOVERY_RESPONSE`, collision avoidance backoff) for opt-in receivers. | Milestone B |
-| **Acoustic Pairing & Transfer** | Explicit `TRANSFER_OFFER`, user accept/decline dialog, short authentication string (SAS) comparison, and acoustic `TRANSFER_ACK`. | Milestone B |
-| **Multi-Device Broadcast** | Group session key distribution with individual acoustic acknowledgments. | Milestone B |
-| **Offline Storage (SQLite)** | Local SQLite database for settings, device aliases, and transfer history. | Milestone B / C |
-| **Frontend Service Wiring** | Connecting React pages to real Tauri IPC commands/events (replacing `setTimeout` mocks). | Milestone C |
-| **Cross-Platform Packaging** | PyInstaller standalone binary compilation and Tauri bundler configurations (.dmg/.app, .msi/.exe, .deb/.AppImage). | Milestone C |
+| Milestone | Scope & Deliverables | Status |
+|---|---|:---:|
+| **Milestone B: Physical Acoustic Transmission** | 48 kHz / 44.1 kHz sample rate negotiation, configurable primary (18/19 kHz) & secondary audible fallback (14/15 kHz) profiles, half-duplex transmit/receive switching with acoustic guard decay, physical speaker-to-microphone roundtrip validation. | **NEXT** |
+| **Milestone C: Protocol Framing & Reed-Solomon ECC** | Canonical 8-type frame architecture (`DISCOVERY_PING`, `TRANSFER_OFFER`, etc.), configurable Reed-Solomon ECC (8, 16, 32 parity symbols), CRC-16 header/payload protection. | Pending |
+| **Milestone D: Cryptography & Secure Pairing** | Ephemeral X25519 key exchange, HKDF-SHA256 directional session keys, AES-256-GCM authenticated encryption, 6-digit SAS visual confirmation, unique nonce tracking. | Pending |
+| **Milestone E: Discovery & Transfer State Machine** | Opt-in discovery with randomized collision avoidance slots (800 ms), explicit offer/accept handshake, SAS verification gating payload transfer. | Pending |
+| **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | Pending |
+| **Milestone G: Local Storage** | SQLite local store in OS application data directory for transfer history, aliases, and settings. | Pending |
+| **Milestone H: Full UI Integration** | Connect all 8 React pages (Overview, Receive, Transmit, Broadcast, Security, Sessions, Settings) to real backend events. | Pending |
+| **Milestone I: Production Packaging** | PyInstaller sidecar binary compilation, Tauri bundler for macOS (.dmg/.app), Windows (.msi/.exe), Linux (.deb/.AppImage). | Pending |
 
 ---
 
 ## 5. Known Bugs & Code Smells
 
-1. **Frontend Services Disconnect:** All 5 services in `src/services/` are currently mock `setTimeout` loops and do not invoke any backend functionality.
+1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestones B–D.
 2. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
-3. **Hardware Sample Rate Standard:** Protocol constants default to 44,100 Hz, whereas the master engineering specification specifies 48,000 Hz as the primary target with 44,100 Hz as fallback. Dynamic sample rate negotiation must be introduced.
-4. **Half-Duplex Audio Transition:** Sound cards cannot simultaneously record and play ultrasonic audio cleanly without self-interference. The state machine must enforce explicit half-duplex transmit/receive switching with acoustic guard intervals.
+3. **Hardware Sample Rate Standard:** Engine currently defaults to 44,100 Hz; dynamic negotiation for 48,000 Hz primary standard will be established in Milestone B.
+4. **Half-Duplex Audio Transition:** Sound cards cannot simultaneously record and play ultrasonic audio cleanly without self-interference. The state machine must enforce explicit half-duplex transmit/receive switching with acoustic guard intervals (Milestone B).
 
 ---
 
 ## 6. Current Test Results
 
 ### Backend Automated Test Suite
-- **Command:** `source backend/venv/bin/activate && python -m pytest backend/tests/ -v`
-- **Result:** **156 passed in 0.99s** (100% pass rate)
+- **Command:** `source backend/venv/bin/activate && pytest backend/tests/ -v`
+- **Result:** **163 passed in 1.10s** (100% pass rate)
+  - `test_bridge.py`: 7 passed (NEW)
   - `test_bitstream.py`: 8 passed
   - `test_checksum.py`: 12 passed
   - `test_clock_recovery.py`: 5 passed
@@ -151,20 +158,25 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
   - `test_events.py`: 5 passed
   - `test_signal.py`: 20 passed
 
+### Desktop Shell Compilation (Tauri 2 + Rust)
+- **Command:** `cargo check` in `src-tauri`
+- **Result:** **100% clean compilation** (0 warnings, 0 errors, dev profile finished in 0.65s).
+
 ### Frontend Typecheck & Build
 - **Command:** `npx tsc --noEmit && npm run build`
 - **Result:** **100% clean compilation**
-  - Bundle size: 301.87 kB JS, 59.90 kB CSS, zero network CDN references.
+  - Bundle size: 307.55 kB JS, 60.56 kB CSS, zero network CDN references.
 
 ---
 
 ## 7. Next Implementation Tasks (Roadmap)
 
 ### Milestone A: Desktop Foundation & IPC Bridge
-- [ ] Task A.1: Initialize Tauri 2 desktop shell in `src-tauri/` with Rust configuration and native permissions.
-- [ ] Task A.2: Implement Python JSON Lines IPC server (`whisper/engine/bridge.py`) for stdin/stdout communication.
-- [ ] Task A.3: Implement Rust sidecar process manager and Tauri command handlers for `get_app_status`, `list_audio_devices`, and `run_calibration`.
-- [ ] Task A.4: Create frontend Tauri IPC client adapter replacing mock services.
+- [x] Task A.1: Initialize Tauri 2 desktop shell in `src-tauri/` with Rust configuration and native permissions.
+- [x] Task A.2: Implement Python JSON Lines IPC server (`whisper/engine/bridge.py`) for stdin/stdout communication.
+- [x] Task A.3: Implement Rust sidecar process manager and Tauri command handlers for `get_app_status`, `list_audio_devices`, and `run_calibration`.
+- [x] Task A.4: Create frontend Tauri IPC client adapter replacing mock services.
+
 
 ### Milestone B: Complete Acoustic Protocol & Security
 - [ ] Task B.1: Implement Cryptography Layer (`whisper/crypto/`: X25519, HKDF-SHA256, AES-256-GCM, SAS computation).

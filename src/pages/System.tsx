@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '../components/ui/Button';
+import { runDiagnostics, getDeviceInfo } from '../services/diagnosticsService';
+import type { DeviceInfo } from '../types';
 
 const PAGE_TRANSITION = {
   initial: { opacity: 0, y: 20 },
@@ -11,41 +13,85 @@ const PAGE_TRANSITION = {
 
 export function System() {
   const [testing, setTesting] = useState(false);
-  const [results, setResults] = useState<Record<string, string>>({});
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
+  const [results, setResults] = useState<Record<string, { status: string; value?: string; message?: string }>>({});
 
-  const handleTest = () => {
+  useEffect(() => {
+    let mounted = true;
+    getDeviceInfo()
+      .then((info) => {
+        if (mounted) setDeviceInfo(info);
+      })
+      .catch((err) => console.error('Failed to load device info:', err));
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleTest = async () => {
     setTesting(true);
     setResults({});
-    
-    const items = [
-      'AUDIO INPUT', 'AUDIO OUTPUT', 'SAMPLE RATE', 
-      'CHANNEL', 'CENTER FREQUENCY', 'MODULATION', 
-      'ERROR CORRECTION', 'SECURITY', 'NETWORK'
-    ];
-    
-    let t = 0;
-    items.forEach((item, i) => {
-      t += 300 + Math.random() * 200;
-      setTimeout(() => {
-        setResults(prev => ({ ...prev, [item]: 'PASS' }));
-      }, t);
-    });
 
-    setTimeout(() => {
+    try {
+      await runDiagnostics((result) => {
+        setResults((prev) => ({
+          ...prev,
+          [result.component]: {
+            status: result.status.toUpperCase(),
+            value: result.value,
+            message: result.message,
+          },
+        }));
+      });
+    } catch (err) {
+      console.error('Diagnostic error:', err);
+    } finally {
       setTesting(false);
-    }, t + 200);
+    }
   };
 
-  const DIAGNOSTICS = [
-    { label: 'AUDIO INPUT',      val: 'READY' },
-    { label: 'AUDIO OUTPUT',     val: 'READY' },
-    { label: 'SAMPLE RATE',      val: '44.1 KHZ' },
-    { label: 'CHANNEL',          val: '18–20 KHZ' },
-    { label: 'CENTER FREQUENCY', val: '19.0 KHZ' },
-    { label: 'MODULATION',       val: 'AFSK' },
-    { label: 'ERROR CORRECTION', val: 'REED-SOLOMON' },
-    { label: 'SECURITY',         val: 'AES-256' },
-    { label: 'NETWORK',          val: 'ISOLATED' },
+  const DIAGNOSTIC_ROWS = [
+    {
+      label: 'AUDIO INPUT',
+      defaultVal: deviceInfo?.audioInput ? `${deviceInfo.audioInput.slice(0, 28)}` : 'PROBING...',
+      key: 'MICROPHONE',
+    },
+    {
+      label: 'AUDIO OUTPUT',
+      defaultVal: deviceInfo?.audioOutput ? `${deviceInfo.audioOutput.slice(0, 28)}` : 'PROBING...',
+      key: 'SPEAKER',
+    },
+    {
+      label: 'SAMPLE RATE',
+      defaultVal: deviceInfo ? `${deviceInfo.sampleRate / 1000} KHZ` : '48.0 KHZ',
+      key: 'CHANNEL',
+    },
+    {
+      label: 'CHANNEL BAND',
+      defaultVal: deviceInfo ? deviceInfo.channelBand : '18.0–19.0 KHZ',
+      key: 'FREQUENCY',
+    },
+    {
+      label: 'SIGNAL NOISE FLOOR',
+      defaultVal: results['SIGNAL']?.value || 'STANDBY',
+      key: 'SIGNAL',
+    },
+    {
+      label: 'MODULATION',
+      defaultVal: '2-FSK (50 BAUD)',
+      key: 'MODULATION',
+    },
+    {
+      label: 'SECURITY PROFILE',
+      defaultVal: 'X25519 / AES-256-GCM',
+      key: 'SECURITY',
+    },
+    {
+      label: 'NETWORK ISOLATION',
+      defaultVal: 'AIR-GAPPED (OFFLINE)',
+      key: 'NETWORK',
+    },
   ];
 
   return (
@@ -61,19 +107,34 @@ export function System() {
 
         <div className="w-full bg-[#101114] border border-[#E8E8E3]/10 p-8 md:p-12 mb-12">
           <div className="flex flex-col gap-4">
-            {DIAGNOSTICS.map((item) => (
-              <div key={item.label} className="flex justify-between items-center border-b border-[#E8E8E3]/5 pb-4">
-                <span className="text-xs md:text-sm font-mono tracking-widest text-[#888A8F]">{item.label}</span>
-                <span className="text-xs md:text-sm font-mono tracking-widest text-[#E8E8E3]">
-                  {results[item.label] || item.val}
-                </span>
-              </div>
-            ))}
+            {DIAGNOSTIC_ROWS.map((item) => {
+              const res = results[item.key];
+              const displayVal = res ? `${res.status} — ${res.value || res.message || ''}` : item.defaultVal;
+
+              return (
+                <div key={item.label} className="flex justify-between items-center border-b border-[#E8E8E3]/5 pb-4">
+                  <span className="text-xs md:text-sm font-mono tracking-widest text-[#888A8F]">{item.label}</span>
+                  <span
+                    className={`text-xs md:text-sm font-mono tracking-widest ${
+                      res?.status === 'PASS'
+                        ? 'text-emerald-400'
+                        : res?.status === 'FAIL'
+                        ? 'text-red-400'
+                        : res?.status === 'RUNNING'
+                        ? 'text-amber-400 animate-pulse'
+                        : 'text-[#E8E8E3]'
+                    }`}
+                  >
+                    {displayVal}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
         <Button onClick={handleTest} disabled={testing}>
-          {testing ? 'RUNNING DIAGNOSTICS...' : 'CHANNEL TEST'}
+          {testing ? 'RUNNING REAL CALIBRATION...' : 'RUN CHANNEL TEST'}
         </Button>
       </div>
     </motion.div>
