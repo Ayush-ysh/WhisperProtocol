@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "WhisperProtocol",
   "version": "0.1.0",
-  "identifier": "com.whisperprotocol.app",
+  "identifier": "com.whisperprotocol.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
