@@ -10,6 +10,9 @@ backend/dist/
 *.egg-info/
 backend/*.egg-info/
 target/
+src-tauri/target/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
 
 # Python
 __pycache__/

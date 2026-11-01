@@ -21,24 +21,34 @@ pub struct PythonBridge {
 
 impl PythonBridge {
     pub async fn spawn(app_handle: AppHandle) -> Result<Arc<Self>, String> {
-        let python_bin = Self::find_python_interpreter()?;
-        let backend_dir = Self::find_backend_dir()?;
+        let force_python = std::env::var("WHISPER_FORCE_PYTHON").is_ok()
+            || std::env::var("WHISPER_PYTHON_BIN").is_ok();
 
-        log::info!(
-            "Spawning Python engine sidecar: {:?} in {:?}",
-            python_bin,
-            backend_dir
-        );
+        let mut cmd = if !force_python && Self::find_standalone_binary().is_some() {
+            let bin = Self::find_standalone_binary().unwrap();
+            log::info!("Spawning standalone whisper-engine binary: {:?}", bin);
+            Command::new(bin)
+        } else {
+            let python_bin = Self::find_python_interpreter()?;
+            let backend_dir = Self::find_backend_dir()?;
+            log::info!(
+                "Spawning Python engine sidecar via interpreter: {:?} in {:?}",
+                python_bin,
+                backend_dir
+            );
+            let mut c = Command::new(&python_bin);
+            c.arg("-m")
+                .arg("whisper.engine.bridge")
+                .current_dir(&backend_dir);
+            c
+        };
 
-        let mut child: Child = Command::new(&python_bin)
-            .arg("-m")
-            .arg("whisper.engine.bridge")
-            .current_dir(&backend_dir)
+        let mut child: Child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to spawn Python process: {e}"))?;
+            .map_err(|e| format!("Failed to spawn engine process: {e}"))?;
 
         let pid = child.id().unwrap_or(0);
         let stdin = child.stdin.take().ok_or("Failed to capture child stdin")?;
@@ -174,6 +184,65 @@ impl PythonBridge {
         self.is_running.load(Ordering::SeqCst)
     }
 
+    fn find_standalone_binary() -> Option<PathBuf> {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let triple = "aarch64-apple-darwin";
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        let triple = "x86_64-apple-darwin";
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let triple = "x86_64-unknown-linux-gnu";
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        let triple = "x86_64-pc-windows-msvc";
+
+        #[cfg(not(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "windows", target_arch = "x86_64")
+        )))]
+        let triple = "unknown";
+
+        let bin_ext = if cfg!(windows) { ".exe" } else { "" };
+        let triple_name = format!("whisper-engine-{triple}{bin_ext}");
+        let plain_name = format!("whisper-engine{bin_ext}");
+
+        // 1. Check binaries/ in manifest dir
+        let p1 = manifest_dir.join("binaries").join(&triple_name);
+        if p1.exists() {
+            return Some(p1);
+        }
+        let p2 = manifest_dir.join("binaries").join(&plain_name);
+        if p2.exists() {
+            return Some(p2);
+        }
+
+        // 2. Check backend/dist/
+        if let Some(parent) = manifest_dir.parent() {
+            let p3 = parent.join("backend").join("dist").join(&plain_name);
+            if p3.exists() {
+                return Some(p3);
+            }
+        }
+
+        // 3. Check alongside current executable (in app bundle or target)
+        if let Ok(cur_exe) = std::env::current_exe() {
+            if let Some(exe_dir) = cur_exe.parent() {
+                let p4 = exe_dir.join(&plain_name);
+                if p4.exists() {
+                    return Some(p4);
+                }
+                let p5 = exe_dir.join(&triple_name);
+                if p5.exists() {
+                    return Some(p5);
+                }
+            }
+        }
+
+        None
+    }
+
     fn find_python_interpreter() -> Result<PathBuf, String> {
         if let Ok(env_path) = std::env::var("WHISPER_PYTHON_BIN") {
             let p = PathBuf::from(env_path);
@@ -216,3 +285,30 @@ impl PythonBridge {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_python_interpreter() {
+        let py = PythonBridge::find_python_interpreter();
+        assert!(py.is_ok(), "Python interpreter should be found in venv or system: {:?}", py);
+        assert!(py.unwrap().exists());
+    }
+
+    #[test]
+    fn test_find_backend_dir() {
+        let dir = PythonBridge::find_backend_dir();
+        assert!(dir.is_ok(), "Backend directory should exist: {:?}", dir);
+        assert!(dir.unwrap().join("whisper").exists());
+    }
+
+    #[test]
+    fn test_find_standalone_binary() {
+        let bin = PythonBridge::find_standalone_binary();
+        assert!(bin.is_some(), "Standalone whisper-engine binary should be located in binaries/ or backend/dist/");
+        assert!(bin.unwrap().exists());
+    }
+}
+
