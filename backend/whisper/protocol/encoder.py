@@ -1,16 +1,20 @@
-"""Full message encoder for WhisperProtocol."""
-
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import soundfile as sf
 
 from .constants import DEFAULT_SAMPLE_RATE, DEFAULT_SYMBOL_DURATION, DEFAULT_AMPLITUDE, DEFAULT_FADE_MS
-from .bitstream import bytes_to_bits
-from .framing import encode_frame, get_frame_info, FrameError
+from .framing import encode_frame, get_frame_info
 from .modulation import modulate_bits, get_waveform_info
+from whisper.events import (
+    emit_transmission_started,
+    emit_transmission_completed,
+    emit_transmission_error,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -64,36 +68,63 @@ def encode_message(
     if not isinstance(message, str):
         raise ValueError(f"Expected string, got {type(message).__name__}")
 
-    # String -> UTF-8 bytes
-    payload_bytes = message.encode("utf-8")
+    try:
+        emit_transmission_started(
+            message=message,
+            sample_rate=sample_rate,
+            symbol_duration=symbol_duration,
+            amplitude=amplitude,
+        )
+    except Exception as e:
+        logger.debug("Failed to emit transmission_started: %s", e)
 
-    # Bytes -> Frame -> Bits
-    frame_bits = encode_frame(payload_bytes)
+    try:
+        # String -> UTF-8 bytes
+        payload_bytes = message.encode("utf-8")
 
-    # Bits -> AFSK waveform
-    waveform = modulate_bits(
-        frame_bits,
-        sample_rate=sample_rate,
-        symbol_duration=symbol_duration,
-        amplitude=amplitude,
-        fade_ms=fade_ms,
-    )
+        # Bytes -> Frame -> Bits
+        frame_bits = encode_frame(payload_bytes)
 
-    # Calculate metadata
-    frame_info = get_frame_info(payload_bytes)
-    waveform_info = get_waveform_info(frame_bits, sample_rate, symbol_duration)
+        # Bits -> AFSK waveform
+        waveform = modulate_bits(
+            frame_bits,
+            sample_rate=sample_rate,
+            symbol_duration=symbol_duration,
+            amplitude=amplitude,
+            fade_ms=fade_ms,
+        )
 
-    return EncodeResult(
-        waveform=waveform,
-        sample_rate=sample_rate,
-        symbol_duration=symbol_duration,
-        payload=message,
-        payload_bytes=len(payload_bytes),
-        frame_bits=frame_info["total_bits"],
-        bit_count=waveform_info["bit_count"],
-        symbol_count=waveform_info["bit_count"],  # 1 symbol per bit
-        duration_seconds=waveform_info["duration_seconds"],
-    )
+        # Calculate metadata
+        frame_info = get_frame_info(payload_bytes)
+        waveform_info = get_waveform_info(frame_bits, sample_rate, symbol_duration)
+
+        result = EncodeResult(
+            waveform=waveform,
+            sample_rate=sample_rate,
+            symbol_duration=symbol_duration,
+            payload=message,
+            payload_bytes=len(payload_bytes),
+            frame_bits=frame_info["total_bits"],
+            bit_count=waveform_info["bit_count"],
+            symbol_count=waveform_info["bit_count"],  # 1 symbol per bit
+            duration_seconds=waveform_info["duration_seconds"],
+        )
+
+        try:
+            emit_transmission_completed(
+                message=message,
+                duration=result.duration_seconds,
+            )
+        except Exception as e:
+            logger.debug("Failed to emit transmission_completed: %s", e)
+
+        return result
+    except Exception as e:
+        try:
+            emit_transmission_error(message=str(message), error=str(e))
+        except Exception:
+            pass
+        raise
 
 
 def save_waveform(

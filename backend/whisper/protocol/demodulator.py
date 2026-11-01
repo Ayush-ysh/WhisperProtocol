@@ -29,6 +29,17 @@ from .constants import (
 from .bitstream import bits_to_bytes, BitstreamError
 from .checksum import strip_and_verify, ChecksumError
 from .framing import decode_frame, Frame, FrameError
+from whisper.events import (
+    emit_receiver_listening,
+    emit_receiver_signal_detected,
+    emit_receiver_preamble_detected,
+    emit_receiver_sync_locked,
+    emit_receiver_receiving,
+    emit_receiver_verifying,
+    emit_receiver_completed,
+    emit_receiver_error,
+    emit_receiver_stopped,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +79,9 @@ class ReceiverConfig:
     min_confidence: float = 0.6
     input_device: Optional[int] = None
     block_size: Optional[int] = None
+    max_preamble_errors: int = 2
+    max_sync_errors: int = 1
+    enable_clock_recovery: bool = True
 
     @property
     def samples_per_symbol(self) -> int:
@@ -325,6 +339,10 @@ class DemodulatorStateMachine:
                 logger.info("Preamble detected")
                 self.state = ReceiverState.PREAMBLE_DETECTED
                 self.sync_buffer.clear()
+                try:
+                    emit_receiver_preamble_detected()
+                except Exception as e:
+                    logger.debug("Failed to emit preamble_detected: %s", e)
 
         elif self.state == ReceiverState.PREAMBLE_DETECTED:
             self.sync_buffer.append(bit)
@@ -333,6 +351,10 @@ class DemodulatorStateMachine:
                     logger.info("Sync detected")
                     self.state = ReceiverState.SYNCING
                     self.received_bits.clear()
+                    try:
+                        emit_receiver_sync_locked()
+                    except Exception as e:
+                        logger.debug("Failed to emit sync_locked: %s", e)
                 else:
                     logger.debug("Sync mismatch, returning to SEARCHING")
                     self.state = ReceiverState.SEARCHING
@@ -351,23 +373,60 @@ class DemodulatorStateMachine:
                     self.payload_length, self.expected_frame_bits
                 )
                 self.state = ReceiverState.RECEIVING
+                try:
+                    emit_receiver_receiving(len(self.received_bits), self.expected_frame_bits)
+                except Exception as e:
+                    logger.debug("Failed to emit receiving: %s", e)
 
         elif self.state == ReceiverState.RECEIVING:
             self.received_bits.append(bit)
+            try:
+                emit_receiver_receiving(len(self.received_bits), self.expected_frame_bits)
+            except Exception as e:
+                logger.debug("Failed to emit receiving: %s", e)
+
             if len(self.received_bits) >= self.expected_frame_bits:
                 logger.info("Frame complete, validating")
                 self.state = ReceiverState.FRAME_VALIDATION
+                try:
+                    emit_receiver_verifying()
+                except Exception as e:
+                    logger.debug("Failed to emit verifying: %s", e)
+
                 result = self._validate_frame()
                 self.state = ReceiverState.COMPLETE
+
+                try:
+                    if result.success:
+                        msg_str = result.payload.decode("utf-8", errors="replace") if result.payload else ""
+                        emit_receiver_completed(
+                            message=msg_str,
+                            checksum_valid=result.checksum_valid,
+                            confidence=detection.confidence,
+                        )
+                    else:
+                        emit_receiver_error(
+                            error=result.error or "Frame validation failed",
+                            state=self.state.value,
+                        )
+                except Exception as e:
+                    logger.debug("Failed to emit completion event: %s", e)
+
                 return self.state, result
 
         return self.state, None
 
     def _match_preamble(self) -> bool:
-        return self.preamble_buffer == PREAMBLE_BITS
+        if len(self.preamble_buffer) != len(PREAMBLE_BITS):
+            return False
+        errors = sum(a != b for a, b in zip(self.preamble_buffer, PREAMBLE_BITS))
+        return errors <= self.config.max_preamble_errors
 
     def _match_sync(self) -> bool:
-        return self.sync_buffer == SYNC_BITS
+        if len(self.sync_buffer) != len(SYNC_BITS):
+            return False
+        errors = sum(a != b for a, b in zip(self.sync_buffer, SYNC_BITS))
+        return errors <= self.config.max_sync_errors
 
     def _decode_length(self, length_bits: list[int]) -> int:
         length = 0
@@ -451,6 +510,16 @@ class AudioStreamReceiver:
         self._symbol_count = 0
         self._start_time = time.time()
 
+        try:
+            emit_receiver_listening({
+                "sample_rate": self.config.sample_rate,
+                "symbol_duration": self.config.symbol_duration,
+                "freq_zero": self.config.freq_zero,
+                "freq_one": self.config.freq_one,
+            })
+        except Exception as e:
+            logger.debug("Failed to emit receiver_listening: %s", e)
+
         def audio_callback(indata, frames, time_info, status):
             if status:
                 logger.debug("Audio callback status: %s", status)
@@ -479,6 +548,10 @@ class AudioStreamReceiver:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+        try:
+            emit_receiver_stopped()
+        except Exception as e:
+            logger.debug("Failed to emit receiver_stopped: %s", e)
         logger.info("Receiver stopped")
 
     def _process_audio_block(self, block: np.ndarray) -> None:
@@ -495,6 +568,17 @@ class AudioStreamReceiver:
 
                 if self.on_symbol:
                     self.on_symbol(detection)
+
+                if detection.decision in (SymbolDecision.ZERO, SymbolDecision.ONE):
+                    try:
+                        emit_receiver_signal_detected(
+                            frequency=detection.detected_frequency,
+                            confidence=detection.confidence,
+                            energy_zero=detection.energy_zero,
+                            energy_one=detection.energy_one,
+                        )
+                    except Exception as e:
+                        logger.debug("Failed to emit signal_detected: %s", e)
 
                 new_state, frame_result = self.state_machine.process_symbol(detection)
 
@@ -521,7 +605,7 @@ def decode_wav_file(
     config: Optional[ReceiverConfig] = None,
 ) -> FrameDecodeResult:
     """
-    Decode a WAV file using the same demodulator pipeline.
+    Decode a WAV file using the demodulator pipeline with clock recovery.
 
     Args:
         wav_path: Path to WAV file
@@ -549,27 +633,41 @@ def decode_wav_file(
     if sample_rate != cfg.sample_rate:
         logger.warning("Sample rate mismatch: file=%d, config=%d", sample_rate, cfg.sample_rate)
 
-    detector = SymbolDetector(cfg)
-    state_machine = DemodulatorStateMachine(cfg)
-
     spp = cfg.samples_per_symbol
-    num_symbols = len(samples) // spp
 
-    logger.info("Decoding WAV: %d samples, %d symbols at %.1f ms/symbol",
-                len(samples), num_symbols, cfg.symbol_duration * 1000)
+    # Candidate symbol offsets for clock recovery.
+    # We evaluate offset 0 first (fast path). If that fails and clock recovery is enabled,
+    # we test candidate phase offsets across the symbol duration.
+    candidate_offsets = [0]
+    if cfg.enable_clock_recovery and len(samples) >= spp * 4:
+        candidate_offsets.extend([int(k * spp / 8) for k in range(1, 8)])
 
-    for i in range(num_symbols):
-        start = i * spp
-        end = start + spp
-        symbol_samples = samples[start:end]
+    last_result: Optional[FrameDecodeResult] = None
+    last_state = ReceiverState.WAITING
 
-        detection = detector.detect(symbol_samples, timestamp=i * cfg.symbol_duration)
-        state, result = state_machine.process_symbol(detection)
+    for offset in candidate_offsets:
+        detector = SymbolDetector(cfg)
+        state_machine = DemodulatorStateMachine(cfg)
 
-        if result:
-            return result
+        offset_samples = samples[offset:]
+        num_symbols = len(offset_samples) // spp
 
-    return FrameDecodeResult(
+        for i in range(num_symbols):
+            start = i * spp
+            end = start + spp
+            symbol_samples = offset_samples[start:end]
+
+            detection = detector.detect(symbol_samples, timestamp=(offset + start) / cfg.sample_rate)
+            state, result = state_machine.process_symbol(detection)
+
+            if result and result.success:
+                return result
+            if result:
+                last_result = result
+
+        last_state = state_machine.state
+
+    return last_result or FrameDecodeResult(
         success=False,
-        error=f"End of file reached without complete frame (state={state_machine.state.value})",
+        error=f"End of file reached without complete frame (state={last_state.value})",
     )

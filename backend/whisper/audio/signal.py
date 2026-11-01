@@ -55,11 +55,13 @@ def generate_tone(
     fade_samples = int(fade_ms / 1000.0 * sample_rate)
     fade_samples = min(fade_samples, n_samples // 2)
 
-    if fade_samples > 0:
-        fade_in = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
-        fade_out = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)
+    if fade_samples > 1:
+        fade_in = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_samples, dtype=np.float32)))
         tone[:fade_samples] *= fade_in
-        tone[-fade_samples:] *= fade_out
+        tone[-fade_samples:] *= fade_in[::-1]
+    elif fade_samples == 1:
+        tone[0] = 0.0
+        tone[-1] = 0.0
 
     # Ensure no clipping
     tone = np.clip(tone, -1.0, 1.0)

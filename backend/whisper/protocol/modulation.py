@@ -50,11 +50,13 @@ def generate_symbol(
     fade_samples = int(fade_ms / 1000.0 * sample_rate)
     fade_samples = min(fade_samples, n_samples // 2)
 
-    if fade_samples > 0:
-        fade_in = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
-        fade_out = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)
+    if fade_samples > 1:
+        fade_in = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_samples, dtype=np.float32)))
         symbol[:fade_samples] *= fade_in
-        symbol[-fade_samples:] *= fade_out
+        symbol[-fade_samples:] *= fade_in[::-1]
+    elif fade_samples == 1:
+        symbol[0] = 0.0
+        symbol[-1] = 0.0
 
     # Ensure no clipping
     symbol = np.clip(symbol, -1.0, 1.0)

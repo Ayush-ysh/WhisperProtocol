@@ -102,6 +102,31 @@ from .protocol import (
     decode_wav_file,
 )
 
+# Event system
+from .events import (
+    Event,
+    EventType,
+    EventBus,
+    get_event_bus,
+    emit_event,
+    emit_transmission_started,
+    emit_transmission_progress,
+    emit_transmission_completed,
+    emit_transmission_cancelled,
+    emit_transmission_error,
+    emit_receiver_listening,
+    emit_receiver_signal_detected,
+    emit_receiver_preamble_detected,
+    emit_receiver_sync_locked,
+    emit_receiver_receiving,
+    emit_receiver_verifying,
+    emit_receiver_completed,
+    emit_receiver_error,
+    emit_receiver_stopped,
+    emit_calibration_started,
+    emit_calibration_completed,
+)
+
 __all__ = [
     # Audio (Phase 1)
     "AudioDevice",
@@ -184,4 +209,26 @@ __all__ = [
     "DemodulatorStateMachine",
     "AudioStreamReceiver",
     "decode_wav_file",
+    # Events
+    "Event",
+    "EventType",
+    "EventBus",
+    "get_event_bus",
+    "emit_event",
+    "emit_transmission_started",
+    "emit_transmission_progress",
+    "emit_transmission_completed",
+    "emit_transmission_cancelled",
+    "emit_transmission_error",
+    "emit_receiver_listening",
+    "emit_receiver_signal_detected",
+    "emit_receiver_preamble_detected",
+    "emit_receiver_sync_locked",
+    "emit_receiver_receiving",
+    "emit_receiver_verifying",
+    "emit_receiver_completed",
+    "emit_receiver_error",
+    "emit_receiver_stopped",
+    "emit_calibration_started",
+    "emit_calibration_completed",
 ]
