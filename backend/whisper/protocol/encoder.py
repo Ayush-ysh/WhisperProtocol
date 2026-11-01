@@ -5,9 +5,17 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from .constants import DEFAULT_SAMPLE_RATE, DEFAULT_SYMBOL_DURATION, DEFAULT_AMPLITUDE, DEFAULT_FADE_MS
+from .constants import (
+    DEFAULT_SAMPLE_RATE,
+    DEFAULT_SYMBOL_DURATION,
+    DEFAULT_AMPLITUDE,
+    DEFAULT_FADE_MS,
+    FREQ_ZERO,
+    FREQ_ONE,
+)
 from .framing import encode_frame, get_frame_info
 from .modulation import modulate_bits, get_waveform_info
+from .ecc import rs_encode
 from whisper.events import (
     emit_transmission_started,
     emit_transmission_completed,
@@ -48,12 +56,16 @@ def encode_message(
     symbol_duration: float = DEFAULT_SYMBOL_DURATION,
     amplitude: float = DEFAULT_AMPLITUDE,
     fade_ms: float = DEFAULT_FADE_MS,
+    freq_zero: float = FREQ_ZERO,
+    freq_one: float = FREQ_ONE,
+    ecc_symbols: int = 0,
+    phase_continuous: bool = False,
 ) -> EncodeResult:
     """
     Encode text message into AFSK waveform.
 
     Pipeline:
-    STRING -> UTF-8 BYTES -> FRAME -> BITS -> AFSK MODULATION -> WAVEFORM
+    STRING -> UTF-8 BYTES -> [ECC] -> FRAME -> BITS -> AFSK MODULATION -> WAVEFORM
 
     Args:
         message: Text message to encode
@@ -61,6 +73,10 @@ def encode_message(
         symbol_duration: Duration of one symbol in seconds
         amplitude: Peak amplitude (0.0 to 1.0)
         fade_ms: Fade in/out duration in milliseconds
+        freq_zero: Frequency for bit 0 in Hz
+        freq_one: Frequency for bit 1 in Hz
+        ecc_symbols: Number of Reed-Solomon parity symbols (0 = disabled)
+        phase_continuous: Generate continuous-phase CPFSK waveform
 
     Returns:
         EncodeResult with waveform and metadata
@@ -82,6 +98,10 @@ def encode_message(
         # String -> UTF-8 bytes
         payload_bytes = message.encode("utf-8")
 
+        # Optional Reed-Solomon FEC protection
+        if ecc_symbols > 0:
+            payload_bytes = rs_encode(payload_bytes, n_ecc_symbols=ecc_symbols)
+
         # Bytes -> Frame -> Bits
         frame_bits = encode_frame(payload_bytes)
 
@@ -92,7 +112,11 @@ def encode_message(
             symbol_duration=symbol_duration,
             amplitude=amplitude,
             fade_ms=fade_ms,
+            freq_zero=freq_zero,
+            freq_one=freq_one,
+            phase_continuous=phase_continuous,
         )
+
 
         # Calculate metadata
         frame_info = get_frame_info(payload_bytes)

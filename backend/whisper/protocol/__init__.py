@@ -4,6 +4,7 @@ from .constants import (
     FREQ_ZERO,
     FREQ_ONE,
     DEFAULT_SAMPLE_RATE,
+    FALLBACK_SAMPLE_RATE,
     DEFAULT_SYMBOL_DURATION,
     DEFAULT_AMPLITUDE,
     DEFAULT_FADE_MS,
@@ -13,6 +14,11 @@ from .constants import (
     CHECKSUM_BITS,
     PREAMBLE_BITS,
     SYNC_BITS,
+    SAMPLES_PER_SYMBOL,
+    ModulationProfile,
+    MODULATION_PROFILES,
+    PROFILE_ULTRASONIC,
+    PROFILE_AUDIBLE,
     get_samples_per_symbol,
 )
 from .bitstream import (
@@ -32,6 +38,12 @@ from .checksum import (
     add_checksum,
     strip_and_verify,
     ChecksumError,
+)
+from .ecc import (
+    rs_encode,
+    rs_decode,
+    ECCError,
+    ECCUncorrectableError,
 )
 from .framing import (
     encode_frame,
@@ -74,6 +86,7 @@ __all__ = [
     "FREQ_ZERO",
     "FREQ_ONE",
     "DEFAULT_SAMPLE_RATE",
+    "FALLBACK_SAMPLE_RATE",
     "DEFAULT_SYMBOL_DURATION",
     "DEFAULT_AMPLITUDE",
     "DEFAULT_FADE_MS",
@@ -83,6 +96,11 @@ __all__ = [
     "CHECKSUM_BITS",
     "PREAMBLE_BITS",
     "SYNC_BITS",
+    "SAMPLES_PER_SYMBOL",
+    "ModulationProfile",
+    "MODULATION_PROFILES",
+    "PROFILE_ULTRASONIC",
+    "PROFILE_AUDIBLE",
     "get_samples_per_symbol",
     # Bitstream
     "bytes_to_bits",
@@ -100,6 +118,11 @@ __all__ = [
     "add_checksum",
     "strip_and_verify",
     "ChecksumError",
+    # ECC
+    "rs_encode",
+    "rs_decode",
+    "ECCError",
+    "ECCUncorrectableError",
     # Framing
     "encode_frame",
     "decode_frame",
@@ -120,7 +143,7 @@ __all__ = [
     "save_waveform",
     "encode_and_save",
     "EncodeResult",
-    # Demodulator (Phase 3)
+    # Demodulator
     "ReceiverConfig",
     "SymbolDecision",
     "ReceiverState",

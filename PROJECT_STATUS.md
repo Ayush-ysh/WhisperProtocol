@@ -114,14 +114,21 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 - **Real Hardware Telemetry:** `System.tsx` and `diagnosticsService.ts` wired to live device enumeration and calibration, replacing the previous `setTimeout` simulation.
 - **Automated Verification:** Added `backend/tests/test_bridge.py` (7 tests covering JSON parsing, error dispatch, request ID matching, and event forwarding).
 
+### F. Physical Acoustic Transmission & Error Correction (Milestone B)
+- **Primary 48 kHz Standard:** Migrated default system sample rate to 48,000 Hz with transparent 44,100 Hz fallback negotiation.
+- **Configurable Modulation Profiles:** Defined `ModulationProfile` architecture with primary near-ultrasonic standard (`18.0 / 19.0 kHz`) and secondary audible fallback (`14.0 / 15.0 kHz`) for hardware with limited ultrasonic frequency response.
+- **Phase-Continuous FSK (CPFSK):** Implemented continuous-phase frequency generation with raised-cosine outer windowing, eliminating high-frequency spectral phase splatter.
+- **Reed-Solomon ECC:** Implemented `whisper/protocol/ecc.py` supporting configurable parity (8, 16, 32 symbols) with uncorrectable frame rejection.
+- **Half-Duplex Coordinator:** Implemented `HalfDuplexAudioCoordinator` (`whisper/audio/coordinator.py`) providing mutual exclusion between speaker playback and microphone listening, paired with a 350 ms acoustic reverberation decay guard interval.
+- **CLI Upgrades:** Updated `whisper.cli.transmit` and `whisper.cli.receive` with `--profile {ultrasonic,audible}`, `--ecc {0,8,16,32}`, and `--phase-continuous` options.
+
 ---
 
 ## 4. Pending Milestones
 
 | Milestone | Scope & Deliverables | Status |
 |---|---|:---:|
-| **Milestone B: Physical Acoustic Transmission** | 48 kHz / 44.1 kHz sample rate negotiation, configurable primary (18/19 kHz) & secondary audible fallback (14/15 kHz) profiles, half-duplex transmit/receive switching with acoustic guard decay, physical speaker-to-microphone roundtrip validation. | **NEXT** |
-| **Milestone C: Protocol Framing & Reed-Solomon ECC** | Canonical 8-type frame architecture (`DISCOVERY_PING`, `TRANSFER_OFFER`, etc.), configurable Reed-Solomon ECC (8, 16, 32 parity symbols), CRC-16 header/payload protection. | Pending |
+| **Milestone C: Canonical Protocol Framing** | Canonical 8-type frame architecture (`DISCOVERY_PING`, `TRANSFER_OFFER`, `DATA_FRAME`, etc.), protocol version, session ID, sequence numbers. | **NEXT** |
 | **Milestone D: Cryptography & Secure Pairing** | Ephemeral X25519 key exchange, HKDF-SHA256 directional session keys, AES-256-GCM authenticated encryption, 6-digit SAS visual confirmation, unique nonce tracking. | Pending |
 | **Milestone E: Discovery & Transfer State Machine** | Opt-in discovery with randomized collision avoidance slots (800 ms), explicit offer/accept handshake, SAS verification gating payload transfer. | Pending |
 | **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | Pending |
@@ -133,10 +140,8 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ## 5. Known Bugs & Code Smells
 
-1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestones B–D.
+1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestones C–E.
 2. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
-3. **Hardware Sample Rate Standard:** Engine currently defaults to 44,100 Hz; dynamic negotiation for 48,000 Hz primary standard will be established in Milestone B.
-4. **Half-Duplex Audio Transition:** Sound cards cannot simultaneously record and play ultrasonic audio cleanly without self-interference. The state machine must enforce explicit half-duplex transmit/receive switching with acoustic guard intervals (Milestone B).
 
 ---
 
@@ -144,8 +149,10 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ### Backend Automated Test Suite
 - **Command:** `source backend/venv/bin/activate && pytest backend/tests/ -v`
-- **Result:** **163 passed in 1.10s** (100% pass rate)
-  - `test_bridge.py`: 7 passed (NEW)
+- **Result:** **178 passed in 1.24s** (100% pass rate)
+  - `test_audio_b.py`: 6 passed (NEW - coordinator, CPFSK, audible profile)
+  - `test_ecc.py`: 9 passed (NEW - Reed-Solomon FEC)
+  - `test_bridge.py`: 7 passed
   - `test_bitstream.py`: 8 passed
   - `test_checksum.py`: 12 passed
   - `test_clock_recovery.py`: 5 passed
@@ -157,6 +164,7 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
   - `test_diagnostics.py`: 17 passed
   - `test_events.py`: 5 passed
   - `test_signal.py`: 20 passed
+
 
 ### Desktop Shell Compilation (Tauri 2 + Rust)
 - **Command:** `cargo check` in `src-tauri`

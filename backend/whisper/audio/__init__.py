@@ -39,8 +39,12 @@ from .diagnostics import (
     DEFAULT_DETECTION_THRESHOLD_DB,
     DEFAULT_MIN_SNR_DB,
 )
+from .coordinator import HalfDuplexAudioCoordinator, CoordinatorState
 
 __all__ = [
+    "HalfDuplexAudioCoordinator",
+    "CoordinatorState",
+
     "AudioDevice",
     "list_input_devices",
     "list_output_devices",

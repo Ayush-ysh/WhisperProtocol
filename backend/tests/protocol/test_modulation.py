@@ -13,7 +13,9 @@ from whisper.protocol import (
     DEFAULT_AMPLITUDE,
     FREQ_ZERO,
     FREQ_ONE,
+    SAMPLES_PER_SYMBOL,
 )
+
 
 
 def _measure_frequency(symbol: np.ndarray, sample_rate: int) -> float:
@@ -148,5 +150,5 @@ class TestWaveformInfo:
         assert info['bit_count'] == 20
         assert info['sample_rate'] == DEFAULT_SAMPLE_RATE
         assert info['symbol_duration_ms'] == 20.0
-        assert info['total_samples'] == 20 * 882
+        assert info['total_samples'] == 20 * SAMPLES_PER_SYMBOL
         assert abs(info['duration_seconds'] - 0.4) < 0.01

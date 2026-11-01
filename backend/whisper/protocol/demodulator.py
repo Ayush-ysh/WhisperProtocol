@@ -29,7 +29,9 @@ from .constants import (
 from .bitstream import bits_to_bytes, BitstreamError
 from .checksum import strip_and_verify, ChecksumError
 from .framing import decode_frame, Frame, FrameError
+from .ecc import rs_decode, ECCError, ECCUncorrectableError
 from whisper.events import (
+
     emit_receiver_listening,
     emit_receiver_signal_detected,
     emit_receiver_preamble_detected,
@@ -71,8 +73,8 @@ class ReceiverConfig:
     symbol_duration: float = DEFAULT_SYMBOL_DURATION
     freq_zero: float = FREQ_ZERO
     freq_one: float = FREQ_ONE
-    band_zero: tuple[float, float] = FREQUENCY_BAND_18KHZ
-    band_one: tuple[float, float] = FREQUENCY_BAND_19KHZ
+    band_zero: Optional[tuple[float, float]] = None
+    band_one: Optional[tuple[float, float]] = None
     target_tolerance_hz: float = TARGET_TOLERANCE_HZ
     detection_threshold_db: float = 20.0
     min_snr_db: float = 12.0
@@ -82,6 +84,14 @@ class ReceiverConfig:
     max_preamble_errors: int = 2
     max_sync_errors: int = 1
     enable_clock_recovery: bool = True
+    ecc_symbols: int = 0
+
+    def __post_init__(self):
+        if self.band_zero is None:
+            object.__setattr__(self, "band_zero", (self.freq_zero - 500.0, self.freq_zero + 500.0))
+        if self.band_one is None:
+            object.__setattr__(self, "band_one", (self.freq_one - 500.0, self.freq_one + 500.0))
+
 
     @property
     def samples_per_symbol(self) -> int:
@@ -148,11 +158,14 @@ class FrameDecodeResult:
     checksum_valid: bool = False
     error: Optional[str] = None
     frame: Optional[Frame] = None
+    ecc_corrected_symbols: int = 0
 
     def __str__(self) -> str:
         if self.success:
-            return f"FrameDecodeResult(success=True, payload={self.payload}, checksum_valid={self.checksum_valid})"
+            ecc_info = f", ecc_corrected={self.ecc_corrected_symbols}" if self.ecc_corrected_symbols > 0 else ""
+            return f"FrameDecodeResult(success=True, payload={self.payload}, checksum_valid={self.checksum_valid}{ecc_info})"
         return f"FrameDecodeResult(success=False, error={self.error})"
+
 
 
 class SymbolDetector:
@@ -437,18 +450,25 @@ class DemodulatorStateMachine:
     def _validate_frame(self) -> FrameDecodeResult:
         try:
             frame = decode_frame(PREAMBLE_BITS + SYNC_BITS + self.received_bits)
+            payload = frame.payload
+            corrected_count = 0
+            if self.config.ecc_symbols > 0 and payload:
+                payload, corrected_count = rs_decode(payload, n_ecc_symbols=self.config.ecc_symbols)
+
             return FrameDecodeResult(
                 success=True,
-                payload=frame.payload,
+                payload=payload,
                 checksum_valid=frame.valid,
                 frame=frame,
+                ecc_corrected_symbols=corrected_count,
             )
-        except (FrameError, BitstreamError, ChecksumError) as e:
+        except (FrameError, BitstreamError, ChecksumError, ECCError) as e:
             logger.warning("Frame validation failed: %s", e)
             return FrameDecodeResult(
                 success=False,
                 error=str(e),
             )
+
 
     def get_status(self, last_detection: Optional[SymbolDetection] = None) -> ReceiverStatus:
         """Get current receiver status."""

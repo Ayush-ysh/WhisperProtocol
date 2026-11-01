@@ -10,8 +10,9 @@ logger = logging.getLogger(__name__)
 TONE_FREQUENCY_BIT_0: float = 18000.0
 TONE_FREQUENCY_BIT_1: float = 19000.0
 
-DEFAULT_SAMPLE_RATE: int = 44100
+DEFAULT_SAMPLE_RATE: int = 48000
 FADE_DURATION_MS: float = 5.0
+
 MAX_AMPLITUDE: float = 0.8
 
 

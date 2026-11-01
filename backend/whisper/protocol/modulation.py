@@ -70,6 +70,9 @@ def modulate_bits(
     symbol_duration: float = DEFAULT_SYMBOL_DURATION,
     amplitude: float = DEFAULT_AMPLITUDE,
     fade_ms: float = DEFAULT_FADE_MS,
+    freq_zero: float = FREQ_ZERO,
+    freq_one: float = FREQ_ONE,
+    phase_continuous: bool = False,
 ) -> np.ndarray:
     """
     Modulate bit sequence into AFSK waveform.
@@ -80,6 +83,9 @@ def modulate_bits(
         symbol_duration: Duration of one symbol in seconds
         amplitude: Peak amplitude (0.0 to 1.0)
         fade_ms: Fade in/out duration in milliseconds
+        freq_zero: Mark frequency for bit 0 in Hz
+        freq_one: Space frequency for bit 1 in Hz
+        phase_continuous: If True, generate phase-continuous CPFSK waveform
 
     Returns:
         Float32 numpy array containing concatenated symbols
@@ -87,15 +93,44 @@ def modulate_bits(
     if not bits:
         return np.array([], dtype=np.float32)
 
+    samples_per_symbol = get_samples_per_symbol(sample_rate, symbol_duration)
+
+    if phase_continuous:
+        # Phase-continuous FSK (CPFSK)
+        # Expand frequencies per sample
+        freq_array = np.empty(len(bits) * samples_per_symbol, dtype=np.float64)
+        for i, bit in enumerate(bits):
+            freq = freq_zero if bit == 0 else freq_one
+            freq_array[i * samples_per_symbol : (i + 1) * samples_per_symbol] = freq
+
+        phase = np.cumsum(2.0 * np.pi * freq_array / sample_rate)
+        waveform = (amplitude * np.sin(phase)).astype(np.float32)
+
+        # Apply raised-cosine fade at the very beginning and very end of transmission
+        fade_samples = min(int(fade_ms / 1000.0 * sample_rate), len(waveform) // 4)
+        if fade_samples > 1:
+            fade_in = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_samples, dtype=np.float32)))
+            waveform[:fade_samples] *= fade_in
+            waveform[-fade_samples:] *= fade_in[::-1]
+
+        return np.clip(waveform, -1.0, 1.0)
+
     symbols = []
     for bit in bits:
         symbol = generate_symbol(
-            bit, sample_rate, symbol_duration, amplitude, fade_ms
+            bit=bit,
+            sample_rate=sample_rate,
+            symbol_duration=symbol_duration,
+            amplitude=amplitude,
+            fade_ms=fade_ms,
+            freq_zero=freq_zero,
+            freq_one=freq_one,
         )
         symbols.append(symbol)
 
     waveform = np.concatenate(symbols) if symbols else np.array([], dtype=np.float32)
     return waveform.astype(np.float32)
+
 
 
 def get_waveform_info(bits: list[int], sample_rate: int = DEFAULT_SAMPLE_RATE, symbol_duration: float = DEFAULT_SYMBOL_DURATION) -> dict:
