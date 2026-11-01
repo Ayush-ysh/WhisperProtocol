@@ -251,18 +251,25 @@ impl PythonBridge {
             }
         }
 
-        // Try workspace venv (during development)
+        // Try workspace venv (during development across macOS, Linux, Windows)
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let venv_python = manifest_dir
+        let venv_dir = manifest_dir
             .parent()
             .unwrap_or(&manifest_dir)
             .join("backend")
-            .join("venv")
-            .join("bin")
-            .join("python");
+            .join("venv");
 
-        if venv_python.exists() {
-            return Ok(venv_python);
+        let candidates = [
+            venv_dir.join("bin").join("python"),
+            venv_dir.join("bin").join("python3"),
+            venv_dir.join("Scripts").join("python.exe"),
+            venv_dir.join("python.exe"),
+        ];
+
+        for cand in candidates {
+            if cand.exists() {
+                return Ok(cand);
+            }
         }
 
         // Fallback to system python3
