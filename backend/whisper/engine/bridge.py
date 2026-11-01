@@ -6,6 +6,7 @@ Communicates with Tauri/Rust via standard input and standard output pipes:
 - stderr: diagnostic and application logging (never corrupts stdout IPC)
 """
 
+import base64
 import json
 import logging
 import sys
@@ -20,6 +21,11 @@ from whisper.audio.devices import (
     check_sample_rate_support,
 )
 from whisper.audio.diagnostics import detect_test_tone
+from whisper.audio.coordinator import HalfDuplexAudioCoordinator
+from whisper.protocol.demodulator import ReceiverConfig, FrameDecodeResult
+from whisper.protocol.frames import FrameType
+from whisper.engine.discovery import DiscoveryEngine
+from whisper.engine.transfer import TransferEngine
 from whisper.events import get_event_bus, Event
 
 # Enforce logging to stderr ONLY
@@ -38,6 +44,7 @@ class JSONRPCBridge:
         self,
         in_stream: Optional[TextIO] = None,
         out_stream: Optional[TextIO] = None,
+        coordinator: Optional[HalfDuplexAudioCoordinator] = None,
     ):
         self.in_stream = in_stream or sys.stdin
         self.out_stream = out_stream or sys.stdout
@@ -45,14 +52,42 @@ class JSONRPCBridge:
         self._running = False
         self._event_unsub: Optional[Callable[[], None]] = None
 
+        # Shared Half-Duplex Audio Coordinator
+        self.coordinator = coordinator or HalfDuplexAudioCoordinator(
+            receiver_config=ReceiverConfig(sample_rate=48000, canonical_framing=True),
+            on_frame_received=self._on_frame_received,
+        )
+
+        # Discovery & Transfer Sub-Engines
+        self.discovery = DiscoveryEngine(
+            coordinator=self.coordinator,
+            on_device_discovered=lambda dev: self.send_event("device_discovered", dev.to_dict()),
+        )
+        self.transfer = TransferEngine(
+            coordinator=self.coordinator,
+            on_event=lambda ev_name, data: self.send_event(ev_name, data),
+        )
+
         # Command dispatcher
         self._commands: Dict[str, Callable[[Dict[str, Any]], Any]] = {
+            # System / Diagnostics
             "get_app_status": self._cmd_get_app_status,
             "list_audio_devices": self._cmd_list_audio_devices,
             "run_calibration": self._cmd_run_calibration,
             "start_engine": self._cmd_start_engine,
             "stop_engine": self._cmd_stop_engine,
             "shutdown_engine": self._cmd_shutdown_engine,
+            # Discovery
+            "set_receiver_mode": self._cmd_set_receiver_mode,
+            "start_discovery": self._cmd_start_discovery,
+            "stop_discovery": self._cmd_stop_discovery,
+            "get_discovered_devices": self._cmd_get_discovered_devices,
+            # Transfer
+            "send_transfer_offer": self._cmd_send_transfer_offer,
+            "accept_transfer": self._cmd_accept_transfer,
+            "decline_transfer": self._cmd_decline_transfer,
+            "confirm_sas": self._cmd_confirm_sas,
+            "get_transfer_status": self._cmd_get_transfer_status,
         }
 
     def _write_json(self, payload: Dict[str, Any]) -> None:
@@ -90,6 +125,18 @@ class JSONRPCBridge:
         except Exception as e:
             logger.error("Failed to forward event %s: %s", event.type.value, e)
 
+    def _on_frame_received(self, result: FrameDecodeResult) -> None:
+        """Central acoustic packet router."""
+        if not result.success or not result.protocol_frame:
+            return
+        frame = result.protocol_frame
+        ftype = frame.frame_type
+
+        if ftype in (FrameType.DISCOVERY_PING, FrameType.DISCOVERY_RESPONSE):
+            self.discovery._on_frame_received(result)
+        else:
+            self.transfer._on_frame_received(result)
+
     def _cmd_get_app_status(self, _params: Dict[str, Any]) -> Dict[str, Any]:
         """Return application and engine status."""
         default_in = get_default_input_device()
@@ -102,6 +149,8 @@ class JSONRPCBridge:
             "platform": sys.platform,
             "default_sample_rate": 48000,
             "supported_sample_rates": [44100, 48000],
+            "receiver_mode": self.discovery.is_receiver_mode,
+            "discovering": self.discovery.is_discovering,
             "profiles": {
                 "primary": {
                     "name": "ultrasonic_standard",
@@ -211,13 +260,98 @@ class JSONRPCBridge:
 
     def _cmd_stop_engine(self, _params: Dict[str, Any]) -> Dict[str, Any]:
         self._running = False
+        self.discovery.stop_discovery()
+        self.discovery.set_receiver_mode(False)
+        self.coordinator.stop_listening()
         self.send_event("engine.stopped", {"status": "stopped"})
         return {"stopped": True}
 
     def _cmd_shutdown_engine(self, _params: Dict[str, Any]) -> Dict[str, Any]:
         self._running = False
+        self.discovery.stop_discovery()
+        self.discovery.set_receiver_mode(False)
+        self.coordinator.stop_listening()
         self.send_event("engine.shutdown", {"status": "terminating"})
         return {"shutdown": True}
+
+    # ─── Discovery Commands ──────────────────────────────────────────────────────
+
+    def _cmd_set_receiver_mode(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        enabled = bool(params.get("enabled", True))
+        alias = params.get("alias")
+        active = self.discovery.set_receiver_mode(enabled, alias=alias)
+        return {"receiver_mode": active, "alias": self.discovery.local_alias}
+
+    def _cmd_start_discovery(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        alias = params.get("alias")
+        self.discovery.start_discovery(alias=alias)
+        return {"discovering": True, "alias": self.discovery.local_alias}
+
+    def _cmd_stop_discovery(self, _params: Dict[str, Any]) -> Dict[str, Any]:
+        self.discovery.stop_discovery()
+        return {"discovering": False}
+
+    def _cmd_get_discovered_devices(self, _params: Dict[str, Any]) -> Dict[str, Any]:
+        devices = self.discovery.get_discovered_devices()
+        return {"devices": devices}
+
+    # ─── Transfer Commands ───────────────────────────────────────────────────────
+
+    def _cmd_send_transfer_offer(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        file_name = params.get("file_name", "message.txt")
+        payload_text = params.get("payload_text")
+        payload_b64 = params.get("payload_base64")
+
+        if payload_text is not None:
+            payload = payload_text.encode("utf-8")
+        elif payload_b64 is not None:
+            payload = base64.b64decode(payload_b64)
+        else:
+            raise ValueError("Either 'payload_text' or 'payload_base64' is required")
+
+        target_alias = params.get("target_alias", "")
+        profile = params.get("profile", "ultrasonic")
+        ecc = int(params.get("ecc", 8))
+
+        session_id = self.transfer.initiate_transfer(
+            file_name=file_name,
+            payload=payload,
+            target_alias=target_alias,
+            profile_name=profile,
+            ecc_symbols=ecc,
+        )
+
+        return {
+            "session_id": session_id,
+            "file_name": file_name,
+            "file_size": len(payload),
+            "profile": profile,
+            "ecc_symbols": ecc,
+        }
+
+    def _cmd_accept_transfer(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = int(params["session_id"])
+        accepted = self.transfer.accept_transfer(session_id)
+        return {"session_id": session_id, "accepted": accepted}
+
+    def _cmd_decline_transfer(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = int(params["session_id"])
+        reason = params.get("reason", "DECLINED")
+        declined = self.transfer.decline_transfer(session_id, reason=reason)
+        return {"session_id": session_id, "declined": declined}
+
+    def _cmd_confirm_sas(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = int(params["session_id"])
+        confirmed = bool(params.get("confirmed", True))
+        ok = self.transfer.confirm_sas(session_id, confirmed)
+        return {"session_id": session_id, "sas_confirmed": confirmed, "success": ok}
+
+    def _cmd_get_transfer_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = int(params["session_id"])
+        status = self.transfer.get_session_status(session_id)
+        return {"session_id": session_id, "status": status}
+
+    # ─── Process Run Loop ────────────────────────────────────────────────────────
 
     def handle_line(self, raw_line: str) -> bool:
         """Process a single JSON Line. Returns False if bridge should terminate."""

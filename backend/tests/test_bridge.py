@@ -119,3 +119,61 @@ class TestJSONRPCBridge:
             )
         finally:
             unsub()
+
+    def test_discovery_ipc_commands(self):
+        # 1. Toggle receiver mode
+        msg1 = json.dumps({"id": "req-disc-1", "cmd": "set_receiver_mode", "params": {"enabled": True, "alias": "BridgeNode"}})
+        self.bridge.handle_line(msg1)
+        resp1 = [o for o in self._read_output_lines() if o.get("id") == "req-disc-1"][0]
+        assert resp1["status"] == "ok"
+        assert resp1["data"]["receiver_mode"] is True
+        assert resp1["data"]["alias"] == "BridgeNode"
+
+        # 2. Get discovered devices (initially empty)
+        msg2 = json.dumps({"id": "req-disc-2", "cmd": "get_discovered_devices", "params": {}})
+        self.bridge.handle_line(msg2)
+        resp2 = [o for o in self._read_output_lines() if o.get("id") == "req-disc-2"][0]
+        assert resp2["status"] == "ok"
+        assert resp2["data"]["devices"] == []
+
+        # 3. Stop discovery
+        msg3 = json.dumps({"id": "req-disc-3", "cmd": "stop_discovery", "params": {}})
+        self.bridge.handle_line(msg3)
+        resp3 = [o for o in self._read_output_lines() if o.get("id") == "req-disc-3"][0]
+        assert resp3["status"] == "ok"
+        assert resp3["data"]["discovering"] is False
+
+    def test_transfer_ipc_commands(self):
+        # Mock transmit to prevent actual speaker playback during unit test
+        self.bridge.coordinator.transmit = lambda *args, **kwargs: None
+
+        # 1. Send transfer offer
+        msg = json.dumps({
+            "id": "req-xfer-1",
+            "cmd": "send_transfer_offer",
+            "params": {
+                "file_name": "test_doc.txt",
+                "payload_text": "Acoustic payload over IPC",
+                "target_alias": "PeerNode",
+            }
+        })
+        self.bridge.handle_line(msg)
+        resp = [o for o in self._read_output_lines() if o.get("id") == "req-xfer-1"][0]
+        assert resp["status"] == "ok"
+        session_id = resp["data"]["session_id"]
+        assert session_id > 0
+        assert resp["data"]["file_name"] == "test_doc.txt"
+        assert resp["data"]["file_size"] == len(b"Acoustic payload over IPC")
+
+        # 2. Get status
+        msg_status = json.dumps({
+            "id": "req-xfer-status",
+            "cmd": "get_transfer_status",
+            "params": {"session_id": session_id}
+        })
+        self.bridge.handle_line(msg_status)
+        resp_status = [o for o in self._read_output_lines() if o.get("id") == "req-xfer-status"][0]
+        assert resp_status["status"] == "ok"
+        assert resp_status["data"]["status"]["session_id"] == session_id
+        assert resp_status["data"]["status"]["state"] == "offer_sent"
+

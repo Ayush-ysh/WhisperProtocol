@@ -1,3 +1,13 @@
-"""WhisperProtocol desktop bridge engine package."""
+"""WhisperProtocol desktop engine package."""
 
-__all__ = ["bridge"]
+from .discovery import DiscoveryEngine, DiscoveredDevice
+from .transfer import TransferEngine, TransferState, TransferSessionContext
+
+__all__ = [
+    "bridge",
+    "DiscoveryEngine",
+    "DiscoveredDevice",
+    "TransferEngine",
+    "TransferState",
+    "TransferSessionContext",
+]

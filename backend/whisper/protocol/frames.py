@@ -305,9 +305,15 @@ def create_transfer_ack(session_id: int, seq_num: int) -> ProtocolFrame:
     )
 
 
-def create_transfer_error(session_id: int, error_code: int, message: str) -> ProtocolFrame:
+def create_transfer_error(
+    session_id: int,
+    error_code: int,
+    message: str = "",
+    error_message: Optional[str] = None,
+) -> ProtocolFrame:
     """Build a TRANSFER_ERROR frame."""
-    payload = struct.pack(">H", error_code & 0xFFFF) + message.encode("utf-8")[:128]
+    msg = error_message if error_message is not None else message
+    payload = struct.pack(">H", error_code & 0xFFFF) + msg.encode("utf-8")[:128]
     return ProtocolFrame(
         frame_type=FrameType.TRANSFER_ERROR,
         session_id=session_id,

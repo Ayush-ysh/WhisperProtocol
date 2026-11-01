@@ -135,14 +135,19 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 - **AES-256-GCM Authenticated Encryption:** Implemented `whisper/crypto/aes_gcm.py` with 96-bit unique nonces, 128-bit authentication tags, Additional Authenticated Data (AAD) session binding, and packed binary payloads.
 - **CryptoSession Lifecycle & Replay Defense:** Implemented `whisper/crypto/session.py` managing state transitions (`INITIALIZING` → `SAS_PENDING` → `SAS_VERIFIED` / `SAS_REJECTED` → `ACTIVE` → `EXPIRED`), strictly blocking transfers before user visual confirmation, rejecting replayed nonces, and enforcing session TTLs.
 
+### I. Discovery & Transfer State Machine (Milestone E)
+- **Acoustic Discovery Engine:** Implemented `whisper/engine/discovery.py` featuring opt-in 'Ready to Receive' mode, acoustic `DISCOVERY_PING` and `DISCOVERY_RESPONSE` frames, randomized collision avoidance response slots (0–3 slots, 800 ms apart), and background receiver listening.
+- **Secure Transfer State Machine:** Implemented `whisper/engine/transfer.py` orchestrating the full authenticated air-gap transfer lifecycle: `TRANSFER_OFFER` → `TRANSFER_ACCEPT` → 6-digit SAS computation & mandatory visual confirmation gate → `DATA_FRAME` with AES-256-GCM authenticated encryption + Reed-Solomon ECC → acoustic `TRANSFER_ACK`.
+- **Demodulator Canonical Framing:** Enhanced `ReceiverConfig` and `DemodulatorStateMachine` (`whisper/protocol/demodulator.py`) to parse canonical 80-bit headers, extract payload lengths, and validate canonical protocol frames with zero regressions.
+- **JSON Lines IPC Command Expansion:** Added `set_receiver_mode`, `start_discovery`, `stop_discovery`, `get_discovered_devices`, `send_transfer_offer`, `accept_transfer`, `decline_transfer`, `confirm_sas`, and `get_transfer_status` to `whisper/engine/bridge.py`.
+
 ---
 
 ## 4. Pending Milestones
 
 | Milestone | Scope & Deliverables | Status |
 |---|---|:---:|
-| **Milestone E: Discovery & Transfer State Machine** | Opt-in discovery with randomized collision avoidance slots (800 ms), explicit offer/accept handshake, SAS verification gating payload transfer. | **NEXT** |
-| **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | Pending |
+| **Milestone F: Multi-Device Broadcast** | Pairwise group key distribution, individual acknowledgement slots, partial delivery matrix. | **NEXT** |
 | **Milestone G: Local Storage** | SQLite local store in OS application data directory for transfer history, aliases, and settings. | Pending |
 | **Milestone H: Full UI Integration** | Connect all 8 React pages (Overview, Receive, Transmit, Broadcast, Security, Sessions, Settings) to real backend events. | Pending |
 | **Milestone I: Production Packaging** | PyInstaller sidecar binary compilation, Tauri bundler for macOS (.dmg/.app), Windows (.msi/.exe), Linux (.deb/.AppImage). | Pending |
@@ -151,7 +156,7 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ## 5. Known Bugs & Code Smells
 
-1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestone E.
+1. **Frontend Services Disconnect:** Transmission, receiver, and security services still use mock simulations pending Milestone H.
 2. **Vestigial Frontend Dependencies:** `lucide-react` is installed but unreferenced; `recharts` is installed but unused.
 
 ---
@@ -160,12 +165,14 @@ Following the completion of **Phase 3.5 (Critical Bug Fixes & Stabilization)**, 
 
 ### Backend Automated Test Suite
 - **Command:** `source backend/venv/bin/activate && pytest backend/tests/ -v`
-- **Result:** **225 passed in 1.46s** (100% pass rate)
-  - `test_crypto.py`: 26 passed (NEW - X25519, HKDF, SAS, AES-GCM, CryptoSession, anti-replay)
+- **Result:** **235 passed in 1.67s** (100% pass rate)
+  - `test_e2e_transfer.py`: 3 passed (NEW - complete authenticated lifecycle, decline, SAS rejection)
+  - `test_discovery.py`: 5 passed (NEW - receiver mode, discovery ping/response, collision avoidance)
+  - `test_crypto.py`: 26 passed
   - `test_frames.py`: 21 passed
   - `test_audio_b.py`: 6 passed
   - `test_ecc.py`: 9 passed
-  - `test_bridge.py`: 7 passed
+  - `test_bridge.py`: 9 passed (expanded with discovery & transfer IPC)
   - `test_bitstream.py`: 8 passed
   - `test_checksum.py`: 12 passed
   - `test_clock_recovery.py`: 5 passed

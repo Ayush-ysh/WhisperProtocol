@@ -85,6 +85,7 @@ class ReceiverConfig:
     max_sync_errors: int = 1
     enable_clock_recovery: bool = True
     ecc_symbols: int = 0
+    canonical_framing: bool = False
 
     def __post_init__(self):
         if self.band_zero is None:
@@ -158,6 +159,7 @@ class FrameDecodeResult:
     checksum_valid: bool = False
     error: Optional[str] = None
     frame: Optional[Frame] = None
+    protocol_frame: Optional[Any] = None
     ecc_corrected_symbols: int = 0
 
     def __str__(self) -> str:
@@ -376,14 +378,19 @@ class DemodulatorStateMachine:
 
         elif self.state == ReceiverState.SYNCING:
             self.received_bits.append(bit)
-            if len(self.received_bits) == LENGTH_FIELD_BITS:
-                self.payload_length = self._decode_length(self.received_bits)
-                self.expected_frame_bits = (
-                    LENGTH_FIELD_BITS + self.payload_length * 8 + CHECKSUM_BITS
-                )
+            header_bits_needed = 80 if self.config.canonical_framing else LENGTH_FIELD_BITS
+            if len(self.received_bits) == header_bits_needed:
+                if self.config.canonical_framing:
+                    self.payload_length = self._decode_length(self.received_bits[64:80])
+                    self.expected_frame_bits = 80 + self.payload_length * 8 + CHECKSUM_BITS
+                else:
+                    self.payload_length = self._decode_length(self.received_bits)
+                    self.expected_frame_bits = (
+                        LENGTH_FIELD_BITS + self.payload_length * 8 + CHECKSUM_BITS
+                    )
                 logger.info(
-                    "Length decoded: %d bytes, expecting %d total bits",
-                    self.payload_length, self.expected_frame_bits
+                    "Length decoded: %d bytes, expecting %d total bits (canonical=%s)",
+                    self.payload_length, self.expected_frame_bits, self.config.canonical_framing
                 )
                 self.state = ReceiverState.RECEIVING
                 try:
@@ -448,6 +455,33 @@ class DemodulatorStateMachine:
         return length
 
     def _validate_frame(self) -> FrameDecodeResult:
+        if self.config.canonical_framing:
+            from .frames import decode_protocol_frame, ProtocolFrameError
+            try:
+                proto_frame = decode_protocol_frame(
+                    PREAMBLE_BITS + SYNC_BITS + self.received_bits,
+                    max_preamble_errors=self.config.max_preamble_errors,
+                    max_sync_errors=self.config.max_sync_errors,
+                )
+                payload = proto_frame.payload
+                corrected_count = 0
+                if self.config.ecc_symbols > 0 and payload:
+                    payload, corrected_count = rs_decode(payload, n_ecc_symbols=self.config.ecc_symbols)
+
+                return FrameDecodeResult(
+                    success=True,
+                    payload=payload,
+                    checksum_valid=proto_frame.valid,
+                    protocol_frame=proto_frame,
+                    ecc_corrected_symbols=corrected_count,
+                )
+            except (ProtocolFrameError, ECCError, BitstreamError) as e:
+                logger.warning("Canonical frame validation failed: %s", e)
+                return FrameDecodeResult(
+                    success=False,
+                    error=str(e),
+                )
+
         try:
             frame = decode_frame(PREAMBLE_BITS + SYNC_BITS + self.received_bits)
             payload = frame.payload
