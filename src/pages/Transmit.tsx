@@ -5,6 +5,7 @@ import {
   sendTransferOffer,
   confirmSas,
   startDiscovery,
+  stopDiscovery,
   getDiscoveredDevices,
   listenToEngineEvent,
   type DiscoveredPeer,
@@ -31,6 +32,7 @@ export function Transmit() {
   const [selectedTarget, setSelectedTarget] = useState<string>('BROADCAST_NEARBY');
   const [peers, setPeers] = useState<DiscoveredPeer[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<string>('');
 
   const byteCount = new TextEncoder().encode(payload).length;
 
@@ -57,6 +59,7 @@ export function Transmit() {
             }
             return [...prev, node];
           });
+          setScanFeedback(`HEARD ACOUSTIC RESPONSE FROM ${node.alias}`);
         }
       );
 
@@ -108,15 +111,31 @@ export function Transmit() {
 
   const handleScanPeers = async () => {
     setIsScanning(true);
+    setScanFeedback('BROADCASTING ULTRASONIC PING (18–19 kHz)...');
     try {
       await startDiscovery();
+      // Listen for all collision-avoidance slots (up to 2.4s delay + 1.6s transmission + reverberation)
       setTimeout(async () => {
-        const res = await getDiscoveredDevices();
-        if (res?.devices) setPeers(res.devices);
-        setIsScanning(false);
-      }, 3000);
+        try {
+          const res = await getDiscoveredDevices();
+          if (res?.devices) {
+            setPeers(res.devices);
+            if (res.devices.length > 0) {
+              setScanFeedback(`FOUND ${res.devices.length} ACTIVE PEER(S) VIA AUDIO SCAN`);
+            } else {
+              setScanFeedback('NO NEARBY NODES RESPONDED (ACTIVATE RECEIVER ON TARGET)');
+            }
+          }
+          await stopDiscovery();
+        } catch (err) {
+          console.debug('Error finishing discovery scan:', err);
+        } finally {
+          setIsScanning(false);
+        }
+      }, 5000);
     } catch (e) {
       console.error('Discovery scan failed:', e);
+      setScanFeedback('DISCOVERY SCAN FAILED TO INITIALIZE');
       setIsScanning(false);
     }
   };
@@ -310,9 +329,9 @@ export function Transmit() {
                 <button
                   onClick={handleScanPeers}
                   disabled={isScanning}
-                  className="text-[9px] font-mono text-[#E8E8E3] underline uppercase disabled:opacity-50"
+                  className="text-[9px] font-mono text-[#E8E8E3] underline uppercase disabled:opacity-50 hover:text-white transition-colors"
                 >
-                  {isScanning ? 'SCANNING...' : 'SCAN NEARBY'}
+                  {isScanning ? 'SCANNING (5s)...' : 'SCAN NEARBY'}
                 </button>
               </div>
               <select
@@ -323,10 +342,17 @@ export function Transmit() {
                 <option value="BROADCAST_NEARBY">BROADCAST TO ANY NEARBY NODE</option>
                 {peers.map((p) => (
                   <option key={p.alias} value={p.alias}>
-                    {p.alias} ({p.profile})
+                    {p.alias} [{p.profile.toUpperCase()}] {p.rssi_db ? `(SNR ${p.rssi_db.toFixed(1)} dB)` : ''}
                   </option>
                 ))}
               </select>
+              {scanFeedback && (
+                <p className={`mt-2 text-[9px] font-mono tracking-wider uppercase ${
+                  isScanning ? 'text-amber-400 animate-pulse' : 'text-[#888A8F]'
+                }`}>
+                  {scanFeedback}
+                </p>
+              )}
             </div>
 
             {/* Modulation Profile */}

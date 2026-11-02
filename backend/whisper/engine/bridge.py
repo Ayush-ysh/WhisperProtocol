@@ -64,20 +64,25 @@ class JSONRPCBridge:
             on_frame_received=self._on_frame_received,
         )
 
+        saved_alias = self.db.get_setting("alias") or "WhisperNode"
+
         # Discovery Engine
         self.discovery = DiscoveryEngine(
+            local_alias=saved_alias,
             coordinator=self.coordinator,
             on_device_discovered=self._on_device_discovered,
         )
 
         # Transfer Engine
         self.transfer = TransferEngine(
+            local_alias=saved_alias,
             coordinator=self.coordinator,
             on_event=self._on_transfer_event,
         )
 
         # Multi-Device Broadcast Engine
         self.broadcast = BroadcastEngine(
+            local_alias=saved_alias,
             coordinator=self.coordinator,
             on_event=lambda ev_name, data: self.send_event(ev_name, data),
         )
@@ -339,12 +344,12 @@ class JSONRPCBridge:
 
     def _cmd_set_receiver_mode(self, params: Dict[str, Any]) -> Dict[str, Any]:
         enabled = bool(params.get("enabled", True))
-        alias = params.get("alias")
+        alias = params.get("alias") or self.db.get_setting("alias") or "WhisperNode"
         active = self.discovery.set_receiver_mode(enabled, alias=alias)
         return {"receiver_mode": active, "alias": self.discovery.local_alias}
 
     def _cmd_start_discovery(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        alias = params.get("alias")
+        alias = params.get("alias") or self.db.get_setting("alias") or "WhisperNode"
         self.discovery.start_discovery(alias=alias)
         return {"discovering": True, "alias": self.discovery.local_alias}
 
@@ -454,6 +459,10 @@ class JSONRPCBridge:
         key = params["key"]
         val = str(params["value"])
         self.db.set_setting(key, val)
+        if key == "alias":
+            self.discovery.local_alias = val
+            self.transfer.local_alias = val
+            self.broadcast.local_alias = val
         return {"updated": True, "key": key, "value": val}
 
     def _cmd_get_saved_nodes(self, _params: Dict[str, Any]) -> Dict[str, Any]:

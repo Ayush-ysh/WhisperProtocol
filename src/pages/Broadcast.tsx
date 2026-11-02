@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import { Button } from '../components/ui/Button';
 import {
   sendBroadcast,
+  startDiscovery,
+  stopDiscovery,
   getDiscoveredDevices,
   getSavedNodes,
   listenToEngineEvent,
@@ -31,6 +33,33 @@ export function Broadcast() {
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
   const [nodeStates, setNodeStates] = useState<Record<string, NodeAckState>>({});
   const [statusText, setStatusText] = useState('STANDBY — SELECT TARGETS');
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState('');
+
+  const syncNodeStates = (nodes: string[]) => {
+    const coords = [
+      { x: 18, y: 22 },
+      { x: 82, y: 18 },
+      { x: 22, y: 80 },
+      { x: 78, y: 82 },
+      { x: 50, y: 15 },
+      { x: 50, y: 85 },
+      { x: 20, y: 50 },
+      { x: 80, y: 50 },
+    ];
+    const states: Record<string, NodeAckState> = {};
+    nodes.forEach((alias, idx) => {
+      const pos = coords[idx % coords.length];
+      states[alias] = {
+        alias,
+        slot_index: idx,
+        status: 'pending',
+        x: pos.x,
+        y: pos.y,
+      };
+    });
+    setNodeStates(states);
+  };
 
   useEffect(() => {
     // Load discovered and saved nodes
@@ -56,10 +85,14 @@ export function Broadcast() {
       }
 
       setAvailableNodes(all);
-      setSelectedNodes(all.map((n) => n.alias));
+      const names = all.map((n) => n.alias);
+      setSelectedNodes(names);
+      syncNodeStates(names);
     }).catch((e) => console.debug('Failed to load broadcast nodes:', e));
 
     let unsubAck: (() => void) | undefined;
+    let unsubDiscovered: (() => void) | undefined;
+
     listenToEngineEvent<{ session_id: number; node: string; slot_index: number; completed: boolean }>(
       'broadcast_node_ack',
       (data) => {
@@ -80,15 +113,74 @@ export function Broadcast() {
       unsubAck = unsub;
     });
 
+    listenToEngineEvent<DiscoveredPeer>(
+      'device_discovered',
+      (node) => {
+        setAvailableNodes((prev) => {
+          const exists = prev.find((p) => p.alias === node.alias);
+          if (exists) {
+            return prev.map((p) => (p.alias === node.alias ? node : p));
+          }
+          return [...prev, node];
+        });
+        setSelectedNodes((prev) => (prev.includes(node.alias) ? prev : [...prev, node.alias]));
+        setScanFeedback(`HEARD ACOUSTIC RESPONSE FROM ${node.alias}`);
+      }
+    ).then((unsub) => {
+      unsubDiscovered = unsub;
+    });
+
     return () => {
       unsubAck?.();
+      unsubDiscovered?.();
     };
   }, []);
 
+  const handleScanPeers = async () => {
+    setIsScanning(true);
+    setScanFeedback('BROADCASTING ULTRASONIC PING (18–19 kHz)...');
+    try {
+      await startDiscovery();
+      setTimeout(async () => {
+        try {
+          const [d, s] = await Promise.all([getDiscoveredDevices(), getSavedNodes()]);
+          const all: DiscoveredPeer[] = [];
+          const seen = new Set<string>();
+          [...(d?.devices || []), ...(s?.nodes || [])].forEach((n) => {
+            if (!seen.has(n.alias)) {
+              seen.add(n.alias);
+              all.push(n);
+            }
+          });
+          if (all.length > 0) {
+            setAvailableNodes(all);
+            const names = all.map((n) => n.alias);
+            setSelectedNodes(names);
+            syncNodeStates(names);
+            setScanFeedback(`SCAN COMPLETE: ${all.length} NODE(S) ACTIVE`);
+          } else {
+            setScanFeedback('NO NEARBY NODES RESPONDED (VERIFY TARGET RECEIVER MODE)');
+          }
+          await stopDiscovery();
+        } catch (err) {
+          console.debug('Error finishing broadcast discovery scan:', err);
+        } finally {
+          setIsScanning(false);
+        }
+      }, 5000);
+    } catch (e) {
+      console.error('Broadcast discovery scan failed:', e);
+      setScanFeedback('DISCOVERY SCAN FAILED');
+      setIsScanning(false);
+    }
+  };
+
   const handleToggleNode = (alias: string) => {
-    setSelectedNodes((prev) =>
-      prev.includes(alias) ? prev.filter((a) => a !== alias) : [...prev, alias]
-    );
+    setSelectedNodes((prev) => {
+      const updated = prev.includes(alias) ? prev.filter((a) => a !== alias) : [...prev, alias];
+      syncNodeStates(updated);
+      return updated;
+    });
   };
 
   const handleBroadcast = async () => {
@@ -223,15 +315,42 @@ export function Broadcast() {
       {/* Target Node Checkboxes & Message Input */}
       <div className="w-full max-w-4xl bg-[#101114] border border-[#E8E8E3]/10 p-6 flex flex-col gap-6 mb-8">
         <div>
-          <div className="flex justify-between items-center mb-3">
-            <span className="text-[10px] font-mono tracking-widest text-[#888A8F] uppercase">SELECT RECIPIENT NODES ({selectedNodes.length} SELECTED)</span>
-            <button
-              onClick={() => setSelectedNodes(selectedNodes.length === availableNodes.length ? [] : availableNodes.map((n) => n.alias))}
-              className="text-[9px] font-mono text-[#E8E8E3] underline uppercase"
-            >
-              {selectedNodes.length === availableNodes.length ? 'DESELECT ALL' : 'SELECT ALL'}
-            </button>
+          <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+            <span className="text-[10px] font-mono tracking-widest text-[#888A8F] uppercase">
+              RECIPIENT NODES ({selectedNodes.length}/{availableNodes.length} SELECTED)
+            </span>
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={handleScanPeers}
+                disabled={isScanning || broadcasting}
+                className="text-[9px] font-mono text-[#E8E8E3] underline uppercase disabled:opacity-50 hover:text-white transition-colors"
+              >
+                {isScanning ? 'SCANNING ULTRASONIC CHANNEL (5s)...' : 'SCAN NEARBY PEERS'}
+              </button>
+              <span className="text-[#888A8F]/40 text-xs">|</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const allAliases = selectedNodes.length === availableNodes.length ? [] : availableNodes.map((n) => n.alias);
+                  setSelectedNodes(allAliases);
+                  syncNodeStates(allAliases);
+                }}
+                className="text-[9px] font-mono text-[#888A8F] underline uppercase hover:text-[#E8E8E3]"
+              >
+                {selectedNodes.length === availableNodes.length ? 'DESELECT ALL' : 'SELECT ALL'}
+              </button>
+            </div>
           </div>
+          {scanFeedback && (
+            <div className="mb-3">
+              <span className={`text-[9px] font-mono tracking-widest uppercase ${
+                isScanning ? 'text-amber-400 animate-pulse' : 'text-[#888A8F]'
+              }`}>
+                {scanFeedback}
+              </span>
+            </div>
+          )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {availableNodes.map((node) => {
               const checked = selectedNodes.includes(node.alias);

@@ -299,7 +299,7 @@ export function Receive() {
               )}
             </div>
 
-            <div className="h-16 flex items-center justify-center mb-8">
+            <div className="flex flex-col items-center justify-center gap-2 mb-8 min-h-[4rem]">
               <span className="text-[10px] font-mono tracking-widest text-[#E8E8E3] uppercase">
                 {state === 'IDLE'
                   ? 'RECEIVER STANDBY — TAP TO ENGAGE'
@@ -307,6 +307,14 @@ export function Receive() {
                   ? 'LISTENING ON ULTRASONIC CHANNEL (18–19 KHZ)...'
                   : 'ACOUSTIC CARRIER ACQUIRED — LOCKING FRAME'}
               </span>
+              {receiverActive && (
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="text-[9px] font-mono tracking-widest text-emerald-400 uppercase">
+                    BEACON ACTIVE — DISCOVERABLE BY NEARBY PEERS
+                  </span>
+                </div>
+              )}
             </div>
 
             {state === 'ACQUIRED' ? (
