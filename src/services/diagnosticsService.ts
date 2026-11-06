@@ -21,15 +21,28 @@ export async function runDiagnostics(
 ): Promise<DiagnosticResult[]> {
   const results: DiagnosticResult[] = [];
 
-  // 1. Microphone Hardware
+  // 1. Microphone Hardware & OS Permission
   onResult({ component: 'MICROPHONE', status: 'running' });
+  let perm: string = 'authorized';
+  try {
+    const { requestMicrophonePermission } = await import('./tauriBridge');
+    perm = await requestMicrophonePermission();
+  } catch (e) {
+    console.debug('Failed to check permission in diagnostics:', e);
+  }
+
   const devices = await listAudioDevices();
   const inputDev = devices.inputs.find((d) => d.index === devices.default_input_index) || devices.inputs[0];
+  const isAllowed = perm === 'authorized';
   const micResult: DiagnosticResult = {
     component: 'MICROPHONE',
-    status: inputDev ? 'pass' : 'fail',
-    value: inputDev ? inputDev.name : 'NO INPUT DEVICE',
-    message: inputDev ? `Input Active (${inputDev.channels} ch @ ${inputDev.default_sample_rate} Hz)` : 'MISSING',
+    status: isAllowed && inputDev ? 'pass' : 'fail',
+    value: !isAllowed ? 'PERMISSION DENIED' : inputDev ? inputDev.name : 'NO INPUT DEVICE',
+    message: !isAllowed
+      ? 'BLOCKED BY MACOS PRIVACY — ENABLE IN SYSTEM SETTINGS'
+      : inputDev
+      ? `Active (${inputDev.channels} ch @ ${inputDev.default_sample_rate} Hz)`
+      : 'NO INPUT DEVICE DETECTED',
   };
   results.push(micResult);
   onResult(micResult);

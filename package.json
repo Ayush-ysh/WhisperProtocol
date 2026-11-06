@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "package": "node scripts/build.mjs",
+    "build:app": "node scripts/build.mjs",
+    "dist": "node scripts/build.mjs",
     "tauri": "tauri",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },

@@ -51,6 +51,14 @@ class HalfDuplexAudioCoordinator:
         with self._lock:
             return self._state
 
+    def update_receiver_config(self, new_config: ReceiverConfig) -> None:
+        """Update receiver configuration, restarting stream if currently listening."""
+        with self._lock:
+            self.receiver_config = new_config
+            if self._state == CoordinatorState.LISTENING:
+                self._disengage_receiver()
+                self._engage_receiver()
+
     def start_listening(self) -> None:
         """Activate microphone receiver in half-duplex mode."""
         with self._lock:
@@ -131,10 +139,22 @@ class HalfDuplexAudioCoordinator:
             # 2. Play acoustic signal through physical speaker
             sd.play(waveform, samplerate=sample_rate, device=output_device, blocking=True)
         except Exception as e:
-            logger.error("Acoustic playback failed: %s", e)
-            with self._lock:
-                self._state = CoordinatorState.IDLE
-            raise
+            fallback_rate = 44100 if sample_rate == 48000 else 48000
+            logger.warning(
+                "Playback failed at %d Hz (%s). Attempting fallback with resampled waveform at %d Hz...",
+                sample_rate, e, fallback_rate
+            )
+            try:
+                num_resampled = int(len(waveform) * fallback_rate / sample_rate)
+                orig_indices = np.linspace(0, len(waveform) - 1, num=len(waveform))
+                new_indices = np.linspace(0, len(waveform) - 1, num=num_resampled)
+                resampled_wave = np.interp(new_indices, orig_indices, waveform).astype(np.float32)
+                sd.play(resampled_wave, samplerate=fallback_rate, device=output_device, blocking=True)
+            except Exception as e2:
+                logger.error("Acoustic playback failed on fallback rate as well: %s", e2)
+                with self._lock:
+                    self._state = CoordinatorState.IDLE
+                raise e
         finally:
             # 3. Acoustic room reverberation decay guard interval
             with self._lock:

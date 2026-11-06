@@ -544,5 +544,94 @@ class TestSymbolDetectionEdgeCases:
         assert detection.timestamp == timestamp
 
 
+class TestParallelMultiPhaseAndCRCRecovery:
+    """Tests for multi-phase clock receiver and 1-bit CRC syndrome recovery."""
+
+    def test_single_bit_crc_recovery_canonical(self):
+        """Test that single bit flips in canonical frames are corrected via CRC syndrome recovery."""
+        from whisper.protocol.frames import ProtocolFrame, FrameType, encode_protocol_frame
+        frame = ProtocolFrame(
+            frame_type=FrameType.TRANSFER_OFFER,
+            session_id=0x12345678,
+            seq_num=0,
+            payload=b"test-offer-payload-1234",
+        )
+        bits = encode_protocol_frame(frame)
+        # bits = PREAMBLE (32) + SYNC (16) + body_bits
+        body_bits = bits[len(PREAMBLE_BITS) + len(SYNC_BITS):]
+
+        config = ReceiverConfig(canonical_framing=True)
+        sm = DemodulatorStateMachine(config)
+
+        # Test flipping bit 10, bit 35, bit 75
+        for flip_idx in [10, 35, 75]:
+            corrupted_body = list(body_bits)
+            corrupted_body[flip_idx] ^= 1
+            sm.received_bits = corrupted_body
+            sm.payload_length = len(frame.payload)
+            sm.expected_frame_bits = len(corrupted_body)
+
+            result = sm._validate_frame()
+            assert result.success, f"Failed to recover bit flip at index {flip_idx}"
+            assert result.protocol_frame is not None
+            assert result.protocol_frame.session_id == 0x12345678
+            assert result.protocol_frame.payload == b"test-offer-payload-1234"
+
+    def test_single_bit_crc_recovery_legacy(self):
+        """Test that single bit flips in legacy frames are corrected via CRC recovery."""
+        payload = b"LEGACY_DATA"
+        bits = encode_frame(payload)
+        body_bits = bits[len(PREAMBLE_BITS) + len(SYNC_BITS):]
+
+        config = ReceiverConfig(canonical_framing=False)
+        sm = DemodulatorStateMachine(config)
+
+        corrupted_body = list(body_bits)
+        corrupted_body[20] ^= 1  # Flip bit in payload
+        sm.received_bits = corrupted_body
+        sm.payload_length = len(payload)
+        sm.expected_frame_bits = len(corrupted_body)
+
+        result = sm._validate_frame()
+        assert result.success
+        assert result.payload == payload
+
+    def test_multiphase_receiver_with_time_offsets(self):
+        """Test that AudioStreamReceiver decodes frames arriving at arbitrary clock phase shifts."""
+        config = ReceiverConfig(canonical_framing=True, enable_clock_recovery=True)
+        from whisper.protocol.frames import ProtocolFrame, FrameType, encode_protocol_frame
+        frame = ProtocolFrame(
+            frame_type=FrameType.DISCOVERY_PING,
+            session_id=0xABCDEF01,
+            seq_num=0,
+            payload=b"PING",
+        )
+        bits = encode_protocol_frame(frame)
+        waveform = modulate_bits(
+            bits,
+            sample_rate=config.sample_rate,
+            symbol_duration=config.symbol_duration,
+            freq_zero=config.freq_zero,
+            freq_one=config.freq_one,
+        )
+
+        spp = config.samples_per_symbol
+        # Test time offsets across symbol fractions
+        for shift in [0, spp // 4, spp // 2, (3 * spp) // 4]:
+            decoded_frames = []
+            receiver = AudioStreamReceiver(config, on_frame=lambda res: decoded_frames.append(res))
+            padded_audio = np.concatenate([np.zeros(shift, dtype=np.float32), waveform, np.zeros(spp * 4, dtype=np.float32)])
+
+            # Feed in 1024-sample chunks like sounddevice callback
+            chunk_size = 1024
+            for i in range(0, len(padded_audio), chunk_size):
+                chunk = padded_audio[i : i + chunk_size]
+                receiver._process_audio_block(chunk)
+
+            assert len(decoded_frames) == 1, f"Failed at shift {shift}: got {len(decoded_frames)} decoded frames"
+            assert decoded_frames[0].success
+            assert decoded_frames[0].protocol_frame.session_id == 0xABCDEF01
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

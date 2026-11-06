@@ -250,7 +250,7 @@ class BroadcastEngine:
             bits,
             sample_rate=self.sample_rate,
             symbol_duration=DEFAULT_SYMBOL_DURATION,
-            amplitude=0.5,
+            amplitude=0.85,
             freq_zero=profile.freq_zero,
             freq_one=profile.freq_one,
             phase_continuous=True,

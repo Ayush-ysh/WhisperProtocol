@@ -6,8 +6,7 @@ from enum import Enum
 from typing import Optional
 
 import numpy as np
-from scipy.signal import get_window
-from scipy.fft import rfft, rfftfreq
+from numpy.fft import rfft, rfftfreq
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +242,16 @@ def analyze_spectrum(
     if len(samples) == 0:
         raise ValueError("Empty samples array")
 
-    window = get_window(window_type, len(samples), fftbins=True)
+    n = len(samples)
+    if window_type in ("hann", "hanning"):
+        window = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(n) / n)).astype(np.float32)
+    elif window_type == "hamming":
+        window = (0.54 - 0.46 * np.cos(2.0 * np.pi * np.arange(n) / n)).astype(np.float32)
+    elif window_type == "blackman":
+        window = (0.42 - 0.5 * np.cos(2.0 * np.pi * np.arange(n) / n) + 0.08 * np.cos(4.0 * np.pi * np.arange(n) / n)).astype(np.float32)
+    else:
+        window = np.ones(n, dtype=np.float32)
+
     windowed = samples * window
 
     magnitudes = np.abs(rfft(windowed))

@@ -20,7 +20,8 @@ class TestDatabaseManager:
         settings = self.db.get_all_settings()
         assert "alias" in settings
         assert "profile" in settings
-        assert settings["alias"] == "WhisperNode"
+        assert settings["alias"].startswith("Whisper")
+        assert len(settings["alias"]) > len("Whisper")
         assert settings["profile"] == "ultrasonic"
 
     def test_update_and_get_setting(self):

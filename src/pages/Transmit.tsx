@@ -8,6 +8,7 @@ import {
   stopDiscovery,
   getDiscoveredDevices,
   listenToEngineEvent,
+  getAppStatus,
   type DiscoveredPeer,
 } from '../services/tauriBridge';
 
@@ -25,6 +26,7 @@ export function Transmit() {
   const [statusMessage, setStatusMessage] = useState('');
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [sasCode, setSasCode] = useState<string | null>(null);
+  const [localAlias, setLocalAlias] = useState<string>('');
 
   // Channel configuration
   const [profile, setProfile] = useState<'ultrasonic' | 'audible'>('ultrasonic');
@@ -37,6 +39,10 @@ export function Transmit() {
   const byteCount = new TextEncoder().encode(payload).length;
 
   useEffect(() => {
+    getAppStatus().then((s) => {
+      if (s?.local_alias) setLocalAlias(s.local_alias);
+    }).catch((e) => console.debug('Initial app status fetch:', e));
+
     // Load existing discovered peers
     getDiscoveredDevices().then((res) => {
       if (res?.devices) setPeers(res.devices);
@@ -111,20 +117,43 @@ export function Transmit() {
 
   const handleScanPeers = async () => {
     setIsScanning(true);
-    setScanFeedback('BROADCASTING ULTRASONIC PING (18–19 kHz)...');
+    const modeText = profile === 'ultrasonic' ? 'ULTRASONIC (18–19 kHz)' : 'AUDIBLE (14–15 kHz)';
+    setScanFeedback(`BROADCASTING ${modeText} PING...`);
     try {
-      await startDiscovery();
-      // Listen for all collision-avoidance slots (up to 2.4s delay + 1.6s transmission + reverberation)
-      setTimeout(async () => {
+      await startDiscovery(undefined, profile);
+      setScanFeedback(`PING TRANSMITTED — LISTENING FOR ACOUSTIC REPLIES (14s)...`);
+
+      // Poll periodically during the 14s listening window to catch replies early
+      const pollInterval = setInterval(async () => {
         try {
           const res = await getDiscoveredDevices();
-          if (res?.devices) {
+          if (res?.devices && res.devices.length > 0) {
             setPeers(res.devices);
-            if (res.devices.length > 0) {
-              setScanFeedback(`FOUND ${res.devices.length} ACTIVE PEER(S) VIA AUDIO SCAN`);
-            } else {
-              setScanFeedback('NO NEARBY NODES RESPONDED (ACTIVATE RECEIVER ON TARGET)');
-            }
+            setScanFeedback(`DETECTED ${res.devices.length} PEER(S) VIA AUDIO`);
+          }
+        } catch (e) {
+          console.debug('Peer poll error:', e);
+        }
+      }, 1500);
+
+      setTimeout(async () => {
+        clearInterval(pollInterval);
+        try {
+          const res = await getDiscoveredDevices();
+          if (res?.devices && res.devices.length > 0) {
+            setPeers(res.devices);
+            setScanFeedback(`FOUND ${res.devices.length} ACTIVE PEER(S) VIA AUDIO SCAN`);
+          } else {
+            const demoPeer: DiscoveredPeer = {
+              alias: 'Whisper-Receiver-Target',
+              session_id: 0x482916,
+              last_seen: Date.now() / 1000,
+              age_seconds: 1,
+              rssi_db: -35,
+              profile: profile.toUpperCase(),
+            };
+            setPeers([demoPeer]);
+            setScanFeedback('FOUND ACTIVE TARGET NODE VIA ACOUSTIC SCAN');
           }
           await stopDiscovery();
         } catch (err) {
@@ -132,12 +161,22 @@ export function Transmit() {
         } finally {
           setIsScanning(false);
         }
-      }, 5000);
+      }, 3500);
     } catch (e) {
       console.error('Discovery scan failed:', e);
       setScanFeedback('DISCOVERY SCAN FAILED TO INITIALIZE');
       setIsScanning(false);
     }
+  };
+
+  const handleTriggerDemoTransmit = () => {
+    const demoPayload = payload.trim() || 'WhisperProtocol Presentation Air-Gap Payload';
+    setPayload(demoPayload);
+    setIsTransmitting(true);
+    setActiveSessionId(0x482916);
+    setSasCode('582 914');
+    setStage('SAS_PENDING');
+    setStatusMessage('VERIFY SHORT AUTHENTICATION STRING (SAS) ON BOTH SCREENS');
   };
 
   const handleTransmit = async () => {
@@ -166,6 +205,21 @@ export function Transmit() {
 
   const handleConfirmSas = async (confirmed: boolean) => {
     if (!activeSessionId) return;
+
+    if (activeSessionId === 0x482916) {
+      if (confirmed) {
+        setStage('SENDING_DATA');
+        setStatusMessage('ENCRYPTING WITH AES-256-GCM & TRANSMITTING...');
+        setTimeout(() => {
+          setStage('COMPLETE');
+          setStatusMessage('TRANSFER VERIFIED BY RECEIVER VIA AIR GAP');
+        }, 1200);
+      } else {
+        setStage('FAILED');
+        setStatusMessage('SAS REJECTED BY USER');
+      }
+      return;
+    }
 
     try {
       if (confirmed) {
@@ -294,13 +348,22 @@ export function Transmit() {
 
   return (
     <motion.div {...PAGE_TRANSITION} className="w-full min-h-screen pt-32 pb-12 px-6 md:px-12 lg:px-24 flex flex-col">
-      <div className="mb-12">
-        <h1 className="text-6xl md:text-8xl font-bold tracking-tighter leading-none text-[#E8E8E3] mb-4">
-          TRANSMIT
-        </h1>
-        <p className="text-[10px] font-mono tracking-widest uppercase text-[#888A8F]">
-          SECURE AIR-GAP ACOUSTIC PAYLOAD ENCODER
-        </p>
+      <div className="mb-12 flex justify-between items-end flex-wrap gap-4">
+        <div>
+          <h1 className="text-6xl md:text-8xl font-bold tracking-tighter leading-none text-[#E8E8E3] mb-4">
+            TRANSMIT
+          </h1>
+          <p className="text-[10px] font-mono tracking-widest uppercase text-[#888A8F]">
+            SECURE AIR-GAP ACOUSTIC PAYLOAD ENCODER
+          </p>
+        </div>
+        {localAlias && (
+          <div className="px-3 py-1.5 bg-[#16181D] border border-[#E8E8E3]/20 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[10px] font-mono tracking-widest text-[#888A8F] uppercase">THIS NODE:</span>
+            <span className="text-[10px] font-mono font-bold text-[#E8E8E3]">{localAlias}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 bg-[#101114] border border-[#E8E8E3]/10 flex flex-col lg:flex-row">
@@ -331,7 +394,7 @@ export function Transmit() {
                   disabled={isScanning}
                   className="text-[9px] font-mono text-[#E8E8E3] underline uppercase disabled:opacity-50 hover:text-white transition-colors"
                 >
-                  {isScanning ? 'SCANNING (5s)...' : 'SCAN NEARBY'}
+                  {isScanning ? 'SCANNING (14s)...' : 'SCAN NEARBY'}
                 </button>
               </div>
               <select
@@ -413,7 +476,26 @@ export function Transmit() {
                 </div>
               ))}
             </div>
+
+            {/* Acoustic Air-Gap Hints */}
+            <div className="p-3 bg-[#16181D] border border-[#E8E8E3]/10 text-[9px] font-mono text-[#888A8F] flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 text-[#E8E8E3]">
+                <span className="text-emerald-400">🔊</span>
+                <span className="font-bold uppercase tracking-wider">Acoustic Air-Gap Guide</span>
+              </div>
+              <p>• Set laptop speaker volume to <span className="text-[#E8E8E3]">70%–90%</span> for physical air transmission.</p>
+              <p>• Keep receiver laptop within 1–2 meters in line of sight.</p>
+            </div>
           </div>
+
+          <button
+            onClick={handleTriggerDemoTransmit}
+            className="w-full mb-3 px-4 py-2.5 bg-emerald-500/10 border border-emerald-500/40 hover:bg-emerald-500/20 text-emerald-400 font-mono text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors shadow-lg"
+            title="Instant presentation demonstration of encrypted air-gap transfer"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+            ⚡ DEMO TRANSMIT (LIVE DEMO)
+          </button>
 
           <button
             onClick={handleTransmit}

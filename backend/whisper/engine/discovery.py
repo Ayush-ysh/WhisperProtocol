@@ -36,6 +36,7 @@ from whisper.events import get_event_bus, Event, EventType
 logger = logging.getLogger(__name__)
 
 COLLISION_AVOIDANCE_SLOT_SECONDS: float = 0.8
+MIN_REPLY_DELAY_SECONDS: float = 0.5
 DEVICE_EXPIRY_SECONDS: float = 60.0
 
 
@@ -78,6 +79,7 @@ class DiscoveryEngine:
 
         self._lock = threading.RLock()
         self._devices: Dict[str, DiscoveredDevice] = {}
+        self._my_outgoing_ping_session_ids: set[int] = set()
         self._receiver_mode_active = False
         self._discovery_active = False
 
@@ -125,16 +127,39 @@ class DiscoveryEngine:
 
             return self._receiver_mode_active
 
-    def start_discovery(self, alias: Optional[str] = None) -> None:
+    def set_profile(self, profile_name: str) -> None:
+        """Update modulation profile for discovery and acoustic reception."""
+        with self._lock:
+            self.profile_name = profile_name
+            self.profile = MODULATION_PROFILES.get(profile_name, MODULATION_PROFILES["ultrasonic"])
+            new_config = ReceiverConfig(
+                sample_rate=self.sample_rate,
+                symbol_duration=DEFAULT_SYMBOL_DURATION,
+                freq_zero=self.profile.freq_zero,
+                freq_one=self.profile.freq_one,
+                canonical_framing=True,
+            )
+            if hasattr(self.coordinator, "update_receiver_config"):
+                self.coordinator.update_receiver_config(new_config)
+
+    def start_discovery(self, alias: Optional[str] = None, profile: Optional[str] = None) -> None:
         """Broadcast a DISCOVERY_PING and listen for DISCOVERY_RESPONSE frames."""
         with self._lock:
             if alias:
                 self.local_alias = alias
+            if profile and profile in MODULATION_PROFILES:
+                self.set_profile(profile)
             self._discovery_active = True
             self.coordinator.start_listening()
 
-        logger.info("Transmitting DISCOVERY_PING for alias '%s'...", self.local_alias)
-        ping_frame = create_discovery_ping(alias=self.local_alias)
+        ping_session_id = random.randint(1, 0x7FFFFFFF)
+        with self._lock:
+            self._my_outgoing_ping_session_ids.add(ping_session_id)
+            if len(self._my_outgoing_ping_session_ids) > 50:
+                self._my_outgoing_ping_session_ids.pop()
+
+        logger.info("Transmitting DISCOVERY_PING for alias '%s' (session=%#x, profile=%s)...", self.local_alias, ping_session_id, self.profile_name)
+        ping_frame = create_discovery_ping(alias=self.local_alias, session_id=ping_session_id)
         self._transmit_frame(ping_frame)
 
     def stop_discovery(self) -> None:
@@ -163,7 +188,7 @@ class DiscoveryEngine:
             bits,
             sample_rate=self.sample_rate,
             symbol_duration=DEFAULT_SYMBOL_DURATION,
-            amplitude=0.5,
+            amplitude=0.85,
             freq_zero=self.profile.freq_zero,
             freq_one=self.profile.freq_one,
             phase_continuous=True,
@@ -187,17 +212,37 @@ class DiscoveryEngine:
         with self._lock:
             if not self._receiver_mode_active:
                 return
+            if frame.session_id and frame.session_id in self._my_outgoing_ping_session_ids:
+                # Ignore self-reflection: this is our own ping echoing back
+                return
 
         peer_alias = frame.payload.decode("utf-8", errors="replace").strip()
         if peer_alias == self.local_alias:
             # Ignore self-reflection
             return
 
-        logger.info("Received DISCOVERY_PING from '%s'. Scheduling collision-avoidant reply.", peer_alias)
+        logger.info("Received DISCOVERY_PING from '%s'. Registering peer and scheduling reply.", peer_alias)
 
-        # Collision avoidance: Pick random slot 0..3 (spaced by 800ms)
+        # Register the pinging peer on the receiver as well so the receiver sees the sender!
+        if peer_alias and peer_alias != self.local_alias:
+            device = DiscoveredDevice(
+                alias=peer_alias,
+                session_id=frame.session_id,
+                last_seen=time.time(),
+                profile=self.profile_name,
+            )
+            with self._lock:
+                self._devices[peer_alias] = device
+
+            if self.on_device_discovered:
+                try:
+                    self.on_device_discovered(device)
+                except Exception as e:
+                    logger.error("Error in on_device_discovered callback: %s", e)
+
+        # Collision avoidance: Pick random slot 0..3 (spaced by 800ms) with baseline delay for transmitter decay guard
         slot = random.choice([0, 1, 2, 3])
-        delay = slot * COLLISION_AVOIDANCE_SLOT_SECONDS
+        delay = MIN_REPLY_DELAY_SECONDS + slot * COLLISION_AVOIDANCE_SLOT_SECONDS
 
         def reply_worker():
             if delay > 0:

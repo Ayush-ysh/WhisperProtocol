@@ -11,6 +11,7 @@ backend/dist/
 backend/*.egg-info/
 target/
 src-tauri/target/
+installers/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 

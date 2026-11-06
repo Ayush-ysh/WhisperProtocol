@@ -22,6 +22,8 @@ export interface AppStatus {
   supported_sample_rates: number[];
   receiver_mode?: boolean;
   discovering?: boolean;
+  local_alias?: string;
+  profile?: string;
   profiles: {
     primary: FrequencyProfile;
     secondary: FrequencyProfile;
@@ -148,6 +150,14 @@ async function invokeTauri<T>(cmd: string, args: Record<string, unknown> = {}): 
 
 // ─── Core & Diagnostics ─────────────────────────────────────────────────────
 
+export async function checkMicrophonePermission(): Promise<'authorized' | 'denied' | 'restricted' | 'not_determined'> {
+  return invokeTauri<'authorized' | 'denied' | 'restricted' | 'not_determined'>('check_microphone_permission');
+}
+
+export async function requestMicrophonePermission(): Promise<'authorized' | 'denied' | 'restricted' | 'not_determined'> {
+  return invokeTauri<'authorized' | 'denied' | 'restricted' | 'not_determined'>('request_microphone_permission');
+}
+
 export async function getAppStatus(): Promise<AppStatus> {
   return invokeTauri<AppStatus>('get_app_status');
 }
@@ -185,12 +195,12 @@ export async function shutdownEngine(): Promise<boolean> {
 
 // ─── Discovery ──────────────────────────────────────────────────────────────
 
-export async function setReceiverMode(enabled: boolean, alias?: string): Promise<{ receiver_mode: boolean; alias: string }> {
-  return invokeTauri<{ receiver_mode: boolean; alias: string }>('set_receiver_mode', { enabled, alias: alias ?? null });
+export async function setReceiverMode(enabled: boolean, alias?: string, profile?: string): Promise<{ receiver_mode: boolean; alias: string }> {
+  return invokeTauri<{ receiver_mode: boolean; alias: string }>('set_receiver_mode', { enabled, alias: alias ?? null, profile: profile ?? null });
 }
 
-export async function startDiscovery(alias?: string): Promise<{ discovering: boolean; alias: string }> {
-  return invokeTauri<{ discovering: boolean; alias: string }>('start_discovery', { alias: alias ?? null });
+export async function startDiscovery(alias?: string, profile?: string): Promise<{ discovering: boolean; alias: string }> {
+  return invokeTauri<{ discovering: boolean; alias: string }>('start_discovery', { alias: alias ?? null, profile: profile ?? null });
 }
 
 export async function stopDiscovery(): Promise<{ discovering: boolean }> {
@@ -338,6 +348,10 @@ function getWebFallbackResponse<T>(cmd: string, args: Record<string, unknown>): 
         default_output: 'Browser WebAudio Output',
       },
     } as unknown as T;
+  }
+
+  if (cmd === 'check_microphone_permission' || cmd === 'request_microphone_permission') {
+    return 'authorized' as unknown as T;
   }
 
   if (cmd === 'list_audio_devices') {

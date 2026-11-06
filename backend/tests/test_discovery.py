@@ -84,7 +84,10 @@ class TestDiscoveryEngine:
 
             # Route incoming ping frame to discovery engine
             self.engine._on_frame_received(decode_result)
-            time.sleep(0.05)  # Allow worker thread to fire
+            for _ in range(20):
+                if len(self.mock_coord.transmitted_frames) >= 1:
+                    break
+                time.sleep(0.05)
 
             assert len(self.mock_coord.transmitted_frames) == 1
 

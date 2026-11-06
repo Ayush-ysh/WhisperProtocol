@@ -185,6 +185,22 @@ class TransferEngine:
         self._transmit_frame(offer_frame, profile_name)
 
         self._emit("transfer_offer_sent", ctx.to_dict())
+
+        # Auto-retransmit offer up to 4 times (every 3.5s) until accepted or cancelled
+        def offer_retransmit_worker():
+            for attempt in range(1, 4):
+                time.sleep(3.5)
+                with self._lock:
+                    curr_ctx = self._sessions.get(session_id)
+                    if not curr_ctx or curr_ctx.state != TransferState.OFFER_SENT:
+                        break
+                logger.info("Auto re-transmitting TRANSFER_OFFER (attempt %d/4) for session %#x...", attempt + 1, session_id)
+                try:
+                    self._transmit_frame(offer_frame, profile_name)
+                except Exception as e:
+                    logger.debug("Offer re-transmit error: %s", e)
+
+        threading.Thread(target=offer_retransmit_worker, daemon=True).start()
         return session_id
 
     def accept_transfer(self, session_id: int) -> bool:
@@ -212,6 +228,22 @@ class TransferEngine:
 
         logger.info("Accepting transfer %#x. Transmitting TRANSFER_ACCEPT...", session_id)
         self._transmit_frame(accept_frame, ctx.profile_name)
+
+        # Auto-retransmit accept up to 3 times (every 3.0s) until data frame arrives
+        def accept_retransmit_worker():
+            for attempt in range(1, 3):
+                time.sleep(3.0)
+                with self._lock:
+                    curr_ctx = self._sessions.get(session_id)
+                    if not curr_ctx or curr_ctx.state != TransferState.SAS_PENDING:
+                        break
+                logger.info("Auto re-transmitting TRANSFER_ACCEPT (attempt %d/3) for session %#x...", attempt + 1, session_id)
+                try:
+                    self._transmit_frame(accept_frame, ctx.profile_name)
+                except Exception as e:
+                    logger.debug("Accept re-transmit error: %s", e)
+
+        threading.Thread(target=accept_retransmit_worker, daemon=True).start()
 
         self._emit("sas_pending", ctx.to_dict())
         return True
@@ -322,7 +354,7 @@ class TransferEngine:
             bits,
             sample_rate=self.sample_rate,
             symbol_duration=DEFAULT_SYMBOL_DURATION,
-            amplitude=0.5,
+            amplitude=0.85,
             freq_zero=profile.freq_zero,
             freq_one=profile.freq_one,
             phase_continuous=True,
@@ -368,6 +400,9 @@ class TransferEngine:
 
         crypto_session = CryptoSession(session_id=frame.session_id, role=SessionRole.RECEIVER)
 
+        receiver_cfg = getattr(self.coordinator, "receiver_config", None)
+        profile_name = "audible" if (receiver_cfg and receiver_cfg.freq_zero < 16000) else "ultrasonic"
+
         ctx = TransferSessionContext(
             session_id=frame.session_id,
             role=SessionRole.RECEIVER,
@@ -376,6 +411,7 @@ class TransferEngine:
             file_size=file_size,
             peer_public_key=sender_pubkey,
             crypto_session=crypto_session,
+            profile_name=profile_name,
         )
 
         with self._lock:

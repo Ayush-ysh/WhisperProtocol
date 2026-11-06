@@ -64,12 +64,20 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: 5. Stage Installers
+if not exist "installers" mkdir "installers"
+if exist "src-tauri\target\release\bundle\nsis\*.exe" copy /Y "src-tauri\target\release\bundle\nsis\*.exe" "installers\"
+if exist "src-tauri\target\release\bundle\msi\*.msi" copy /Y "src-tauri\target\release\bundle\msi\*.msi" "installers\"
+
 echo.
 echo ==========================================================
-echo   BUILD SUCCESSFUL!
+echo   WHISPERPROTOCOL DESKTOP INSTALLER READY
 echo ==========================================================
-echo   Stand-alone Executable: src-tauri\target\release\WhisperProtocol.exe
-echo   Installers (NSIS / MSI): src-tauri\target\release\bundle\
+echo   Standalone Executable: src-tauri\target\release\WhisperProtocol.exe
+echo   Installers (.exe / .msi): installers\
+echo.
+echo   HOW TO INSTALL:
+echo   Run the .exe installer located in the installers\ folder.
 echo ==========================================================
 echo.
 pause

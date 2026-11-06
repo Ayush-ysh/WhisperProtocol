@@ -1,0 +1,192 @@
+name: Cross-Platform Desktop Release Builders
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ============================================================================
+  # 1. macOS Build (.dmg & .app)
+  # ============================================================================
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Standalone Python Engine (PyInstaller)
+        run: |
+          python3 -m venv backend/venv
+          source backend/venv/bin/activate
+          pip install --upgrade pip
+          pip install -e backend/
+          pip install pyinstaller cryptography reedsolo
+          cd backend
+          pyinstaller --clean -y whisper.spec
+          cd ..
+          TARGET_TRIPLE=$(rustc -vV | grep 'host:' | cut -d' ' -f2)
+          mkdir -p src-tauri/binaries
+          cp backend/dist/whisper-engine "src-tauri/binaries/whisper-engine-${TARGET_TRIPLE}"
+          chmod +x "src-tauri/binaries/whisper-engine-${TARGET_TRIPLE}"
+        shell: bash
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build macOS Desktop Application (.dmg)
+        run: npm run tauri build
+        shell: bash
+
+      - name: Upload macOS DMG Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhisperProtocol-macOS-DMG
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
+
+  # ============================================================================
+  # 2. Windows Build (.exe & .msi)
+  # ============================================================================
+  build-windows:
+    name: Build Windows EXE / MSI
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build Standalone Python Engine for Windows
+        run: |
+          python -m venv backend/venv
+          backend/venv/Scripts/python -m pip install --upgrade pip
+          backend/venv/Scripts/pip install -e backend/
+          backend/venv/Scripts/pip install pyinstaller cryptography reedsolo
+          mkdir -p src-tauri/binaries
+          cd backend
+          ./venv/Scripts/pyinstaller --clean -y whisper.spec
+          cp dist/whisper-engine.exe ../src-tauri/binaries/whisper-engine-x86_64-pc-windows-msvc.exe
+        shell: bash
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Windows Desktop Application (.exe / .msi)
+        run: npm run tauri build
+        shell: bash
+
+      - name: Upload Windows Desktop Installer & Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhisperProtocol-Windows-EXE
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/WhisperProtocol.exe
+
+  # ============================================================================
+  # 3. Linux Build (.AppImage & .deb)
+  # ============================================================================
+  build-linux:
+    name: Build Linux AppImage / DEB
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            portaudio19-dev \
+            patchelf
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Standalone Python Engine for Linux
+        run: |
+          python3 -m venv backend/venv
+          source backend/venv/bin/activate
+          pip install --upgrade pip
+          pip install -e backend/
+          pip install pyinstaller cryptography reedsolo
+          cd backend
+          pyinstaller --clean -y whisper.spec
+          cd ..
+          mkdir -p src-tauri/binaries
+          cp backend/dist/whisper-engine src-tauri/binaries/whisper-engine-x86_64-unknown-linux-gnu
+          chmod +x src-tauri/binaries/whisper-engine-x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Linux Desktop Application (.AppImage / .deb)
+        run: npm run tauri build
+        shell: bash
+
+      - name: Upload Linux AppImage & DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhisperProtocol-Linux-AppImage
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb

@@ -6,9 +6,6 @@ block_cipher = None
 datas = []
 binaries = []
 hiddenimports = [
-    "scipy.signal",
-    "scipy.fft",
-    "scipy.special",
     "sounddevice",
     "_sounddevice_data",
     "soundfile",
@@ -35,7 +32,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'notebook', 'IPython'],
+    excludes=[
+        'tkinter',
+        'matplotlib',
+        'notebook',
+        'IPython',
+        'scipy',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

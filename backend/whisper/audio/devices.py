@@ -71,14 +71,13 @@ def get_default_input_device() -> Optional[AudioDevice]:
     """Get the default audio input device."""
     try:
         default_idx = sd.default.device[0]
-        if default_idx == -1:
-            logger.warning("No default input device configured")
-            return None
-        device = sd.query_devices(default_idx)
-        if device["max_input_channels"] == 0:
-            logger.warning("Default device %d has no input channels", default_idx)
-            return None
-        return _device_from_sd(device, default_idx)
+        if default_idx != -1:
+            device = sd.query_devices(default_idx)
+            if device["max_input_channels"] > 0:
+                return _device_from_sd(device, default_idx)
+        # Fallback to first available input-capable device
+        inputs = list_input_devices()
+        return inputs[0] if inputs else None
     except (IndexError, sd.PortAudioError) as e:
         logger.error("Failed to get default input device: %s", e)
         return None
@@ -88,14 +87,13 @@ def get_default_output_device() -> Optional[AudioDevice]:
     """Get the default audio output device."""
     try:
         default_idx = sd.default.device[1]
-        if default_idx == -1:
-            logger.warning("No default output device configured")
-            return None
-        device = sd.query_devices(default_idx)
-        if device["max_output_channels"] == 0:
-            logger.warning("Default device %d has no output channels", default_idx)
-            return None
-        return _device_from_sd(device, default_idx)
+        if default_idx != -1:
+            device = sd.query_devices(default_idx)
+            if device["max_output_channels"] > 0:
+                return _device_from_sd(device, default_idx)
+        # Fallback to first available output-capable device
+        outputs = list_output_devices()
+        return outputs[0] if outputs else None
     except (IndexError, sd.PortAudioError) as e:
         logger.error("Failed to get default output device: %s", e)
         return None

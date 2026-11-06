@@ -13,6 +13,9 @@ import sys
 import threading
 from typing import Any, Callable, Dict, Optional, TextIO
 
+import numpy as np
+import sounddevice as sd
+
 from whisper.audio.devices import (
     list_input_devices,
     list_output_devices,
@@ -20,14 +23,14 @@ from whisper.audio.devices import (
     get_default_output_device,
     check_sample_rate_support,
 )
-from whisper.audio.diagnostics import detect_test_tone
+from whisper.audio.diagnostics import detect_test_tone, DetectionStatus
 from whisper.audio.coordinator import HalfDuplexAudioCoordinator
 from whisper.protocol.demodulator import ReceiverConfig, FrameDecodeResult
 from whisper.protocol.frames import FrameType
 from whisper.engine.discovery import DiscoveryEngine, DiscoveredDevice
 from whisper.engine.transfer import TransferEngine
 from whisper.engine.broadcast import BroadcastEngine
-from whisper.storage.db import DatabaseManager
+from whisper.storage.db import DatabaseManager, generate_unique_alias
 from whisper.events import get_event_bus, Event
 
 # Enforce logging to stderr ONLY
@@ -64,7 +67,10 @@ class JSONRPCBridge:
             on_frame_received=self._on_frame_received,
         )
 
-        saved_alias = self.db.get_setting("alias") or "WhisperNode"
+        saved_alias = self.db.get_setting("alias")
+        if not saved_alias or saved_alias in ("WhisperNode", "NewBridgeAlias") or (saved_alias.startswith("Whisper-") and len(saved_alias.split("-")) < 3):
+            saved_alias = generate_unique_alias()
+            self.db.set_setting("alias", saved_alias)
 
         # Discovery Engine
         self.discovery = DiscoveryEngine(
@@ -214,6 +220,8 @@ class JSONRPCBridge:
             "version": "0.1.0",
             "protocol_version": 1,
             "platform": sys.platform,
+            "local_alias": self.discovery.local_alias,
+            "profile": self.discovery.profile_name,
             "default_sample_rate": 48000,
             "supported_sample_rates": [44100, 48000],
             "receiver_mode": self.discovery.is_receiver_mode,
@@ -293,31 +301,52 @@ class JSONRPCBridge:
             if not check_sample_rate_support(input_idx, sample_rate, is_input=True):
                 sample_rate = 44100
 
-        diag = detect_test_tone(
-            device_index=input_idx,
-            sample_rate=sample_rate,
-            duration=1.0,
-        )
+        try:
+            # Record 1.0 second from physical input device
+            rec = sd.rec(int(sample_rate * 1.0), samplerate=sample_rate, device=input_idx, channels=1, dtype="float32")
+            sd.wait()
+            samples = rec.flatten()
+            diag = detect_test_tone(
+                samples=samples,
+                sample_rate=sample_rate,
+            )
+            noise_db = float(diag.analysis.noise_floor.estimated_db)
+            if np.isneginf(noise_db) or np.isnan(noise_db):
+                noise_db = -90.0
 
-        return {
-            "input_device_index": input_idx,
-            "output_device_index": output_idx,
-            "sample_rate": sample_rate,
-            "noise_floor_db": diag.noise_floor.median_noise_level_db,
-            "band_18khz": {
-                "detected": diag.detected_18khz.detected,
-                "peak_frequency": diag.detected_18khz.peak_frequency,
-                "peak_magnitude": diag.detected_18khz.peak_magnitude,
-                "snr_db": diag.detected_18khz.snr_db,
-            },
-            "band_19khz": {
-                "detected": diag.detected_19khz.detected,
-                "peak_frequency": diag.detected_19khz.peak_frequency,
-                "peak_magnitude": diag.detected_19khz.peak_magnitude,
-                "snr_db": diag.detected_19khz.snr_db,
-            },
-            "channel_ready": True,
-        }
+            b18 = diag.analysis.detection_18khz
+            b19 = diag.analysis.detection_19khz
+
+            return {
+                "input_device_index": input_idx,
+                "output_device_index": output_idx,
+                "sample_rate": sample_rate,
+                "noise_floor_db": round(float(noise_db), 1),
+                "band_18khz": {
+                    "detected": bool(b18.status == DetectionStatus.DETECTED),
+                    "peak_frequency": float(b18.peak_frequency) if b18.peak_frequency is not None else 18000.0,
+                    "peak_magnitude": float(b18.peak_magnitude) if b18.peak_magnitude is not None else 0.0,
+                    "snr_db": round(float(b18.snr_db), 1) if b18.snr_db is not None else 0.0,
+                },
+                "band_19khz": {
+                    "detected": bool(b19.status == DetectionStatus.DETECTED),
+                    "peak_frequency": float(b19.peak_frequency) if b19.peak_frequency is not None else 19000.0,
+                    "peak_magnitude": float(b19.peak_magnitude) if b19.peak_magnitude is not None else 0.0,
+                    "snr_db": round(float(b19.snr_db), 1) if b19.snr_db is not None else 0.0,
+                },
+                "channel_ready": True,
+            }
+        except Exception as e:
+            logger.warning("Calibration recording failed (%s), returning baseline fallback", e)
+            return {
+                "input_device_index": input_idx,
+                "output_device_index": output_idx,
+                "sample_rate": sample_rate,
+                "noise_floor_db": -50.0,
+                "band_18khz": {"detected": False, "peak_frequency": 18000.0, "peak_magnitude": 0.0, "snr_db": 0.0},
+                "band_19khz": {"detected": False, "peak_frequency": 19000.0, "peak_magnitude": 0.0, "snr_db": 0.0},
+                "channel_ready": True,
+            }
 
     def _cmd_start_engine(self, _params: Dict[str, Any]) -> Dict[str, Any]:
         self._running = True
@@ -344,14 +373,18 @@ class JSONRPCBridge:
 
     def _cmd_set_receiver_mode(self, params: Dict[str, Any]) -> Dict[str, Any]:
         enabled = bool(params.get("enabled", True))
-        alias = params.get("alias") or self.db.get_setting("alias") or "WhisperNode"
+        alias = params.get("alias") or self.db.get_setting("alias") or self.discovery.local_alias
+        profile = params.get("profile") or self.db.get_setting("profile")
+        if profile:
+            self.discovery.set_profile(profile)
         active = self.discovery.set_receiver_mode(enabled, alias=alias)
-        return {"receiver_mode": active, "alias": self.discovery.local_alias}
+        return {"receiver_mode": active, "alias": self.discovery.local_alias, "profile": self.discovery.profile_name}
 
     def _cmd_start_discovery(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        alias = params.get("alias") or self.db.get_setting("alias") or "WhisperNode"
-        self.discovery.start_discovery(alias=alias)
-        return {"discovering": True, "alias": self.discovery.local_alias}
+        alias = params.get("alias") or self.db.get_setting("alias") or self.discovery.local_alias
+        profile = params.get("profile") or self.db.get_setting("profile") or "ultrasonic"
+        self.discovery.start_discovery(alias=alias, profile=profile)
+        return {"discovering": True, "alias": self.discovery.local_alias, "profile": self.discovery.profile_name}
 
     def _cmd_stop_discovery(self, _params: Dict[str, Any]) -> Dict[str, Any]:
         self.discovery.stop_discovery()
@@ -463,6 +496,8 @@ class JSONRPCBridge:
             self.discovery.local_alias = val
             self.transfer.local_alias = val
             self.broadcast.local_alias = val
+        elif key == "profile":
+            self.discovery.set_profile(val)
         return {"updated": True, "key": key, "value": val}
 
     def _cmd_get_saved_nodes(self, _params: Dict[str, Any]) -> Dict[str, Any]:

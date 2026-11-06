@@ -26,6 +26,21 @@ def get_default_db_path() -> str:
     return str(base_dir / "whisper.db")
 
 
+def generate_unique_alias() -> str:
+    """Generate a clean, unique machine alias (e.g. Whisper-MacAir-7A3F or Whisper-7A3F)."""
+    import socket
+    import secrets
+    suffix = secrets.token_hex(2).upper()
+    try:
+        host = socket.gethostname().split(".")[0]
+        clean_host = "".join(c for c in host if c.isalnum() or c in "-_")[:6]
+        if clean_host and clean_host.lower() not in ("localhost", "unknown"):
+            return f"Whisper-{clean_host}-{suffix}"
+    except Exception:
+        pass
+    return f"Whisper-{suffix}"
+
+
 class DatabaseManager:
     """Thread-safe SQLite manager for offline settings, node history, and transfer logs."""
 
@@ -87,7 +102,7 @@ class DatabaseManager:
             cursor.execute("SELECT COUNT(*) FROM settings")
             if cursor.fetchone()[0] == 0:
                 defaults = [
-                    ("alias", "WhisperNode"),
+                    ("alias", generate_unique_alias()),
                     ("profile", "ultrasonic"),
                     ("sample_rate", "48000"),
                     ("ecc_symbols", "8"),
@@ -98,6 +113,15 @@ class DatabaseManager:
                     "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
                     [(k, v, now) for k, v in defaults],
                 )
+            else:
+                # Migrate generic "WhisperNode" to machine-unique alias
+                cursor.execute("SELECT value FROM settings WHERE key = 'alias'")
+                row = cursor.fetchone()
+                if row and (row["value"] == "WhisperNode" or not row["value"]):
+                    cursor.execute(
+                        "UPDATE settings SET value = ?, updated_at = ? WHERE key = 'alias'",
+                        (generate_unique_alias(), time.time()),
+                    )
 
             conn.commit()
 

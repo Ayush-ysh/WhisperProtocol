@@ -21,10 +21,11 @@ pub struct PythonBridge {
 
 impl PythonBridge {
     pub async fn spawn(app_handle: AppHandle) -> Result<Arc<Self>, String> {
-        let force_python = std::env::var("WHISPER_FORCE_PYTHON").is_ok()
+        let prefer_python = cfg!(debug_assertions)
+            || std::env::var("WHISPER_FORCE_PYTHON").is_ok()
             || std::env::var("WHISPER_PYTHON_BIN").is_ok();
 
-        let mut cmd = if !force_python && Self::find_standalone_binary().is_some() {
+        let mut cmd = if !prefer_python && Self::find_standalone_binary().is_some() {
             let bin = Self::find_standalone_binary().unwrap();
             log::info!("Spawning standalone whisper-engine binary: {:?}", bin);
             Command::new(bin)
@@ -59,6 +60,10 @@ impl PythonBridge {
             Arc::new(Mutex::new(HashMap::new()));
         let is_running = Arc::new(AtomicBool::new(true));
 
+        let (ready_tx, ready_rx) = oneshot::channel::<()>();
+        let ready_tx = Arc::new(Mutex::new(Some(ready_tx)));
+        let ready_tx_clone = Arc::clone(&ready_tx);
+
         // Reader task for stdout (JSON Lines IPC)
         let pending_clone = Arc::clone(&pending);
         let is_running_clone = Arc::clone(&is_running);
@@ -91,6 +96,12 @@ impl PythonBridge {
                     } else if let Some(event) = val.get("event").and_then(|e| e.as_str()) {
                         let data = val.get("data").cloned().unwrap_or(serde_json::Value::Null);
                         log::info!("Python bridge event: {} -> {:?}", event, data);
+                        if event == "engine.ready" {
+                            let mut r = ready_tx_clone.lock().await;
+                            if let Some(tx) = r.take() {
+                                let _ = tx.send(());
+                            }
+                        }
                         let _ = app_handle_clone.emit(&format!("whisper:{event}"), data);
                     }
                 } else {
@@ -116,6 +127,20 @@ impl PythonBridge {
             is_running_exit.store(false, Ordering::SeqCst);
             log::info!("Python process exited with status: {:?}", status);
         });
+
+        // Wait for engine.ready with 45s timeout to accommodate PyInstaller first-run library extraction
+        log::info!("Waiting for Python engine.ready signal (up to 45s)...");
+        match tokio::time::timeout(Duration::from_secs(45), ready_rx).await {
+            Ok(Ok(_)) => {
+                log::info!("Python engine successfully initialized and ready!");
+            }
+            Ok(Err(_)) => {
+                log::warn!("Engine ready channel closed unexpectedly, proceeding with bridge");
+            }
+            Err(_) => {
+                log::warn!("Timed out waiting 45s for engine.ready, proceeding with bridge anyway");
+            }
+        }
 
         Ok(Arc::new(Self {
             stdin: Arc::new(Mutex::new(stdin)),

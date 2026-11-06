@@ -79,7 +79,7 @@ FREQ_ZERO: int = int(PROFILE_ULTRASONIC.freq_zero)
 FREQ_ONE: int = int(PROFILE_ULTRASONIC.freq_one)
 FREQUENCY_BAND_18KHZ: Tuple[float, float] = PROFILE_ULTRASONIC.band_zero
 FREQUENCY_BAND_19KHZ: Tuple[float, float] = PROFILE_ULTRASONIC.band_one
-TARGET_TOLERANCE_HZ: float = 200.0
+TARGET_TOLERANCE_HZ: float = 350.0
 
 
 def get_samples_per_symbol(sample_rate: int, symbol_duration: float) -> int:
